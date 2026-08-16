@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://market-desk/schemas/alert_state.schema.json",
+  "title": "Alert State",
+  "description": "The monitor's memory. Because each monitor cycle runs as a fresh session with no conversational history, ALL continuity lives here. A monitor that does not read and write this file will re-alert the same trigger every cycle — this file is the difference between a useful desk and one the client mutes before 10am.",
+  "type": "object",
+  "required": ["schema_version", "session_date", "cycles", "fired"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "session_date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "watchlist_ref": { "type": "string", "description": "Path to the watchlist this state is tracking. If it does not match, the monitor must halt rather than guess." },
+    "cycles": {
+      "type": "array",
+      "description": "One entry per monitor run. Append-only. Gives you a latency and coverage record for free, and makes a missed cycle visible instead of silent.",
+      "items": {
+        "type": "object",
+        "required": ["at", "tickers_checked", "requests_used"],
+        "properties": {
+          "at": { "type": "string", "format": "date-time" },
+          "tickers_checked": { "type": "array", "items": { "type": "string" } },
+          "requests_used": { "type": "integer" },
+          "triggers_evaluated": { "type": "integer" },
+          "triggers_fired": { "type": "integer" },
+          "errors": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Endpoints that failed this cycle. Recorded, not swallowed. A trigger that could not be evaluated is NOT the same as a trigger that did not fire, and the two must never be conflated."
+          },
+          "not_evaluated": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Trigger ids the monitor could not evaluate this cycle, with the reason. These are reported to the client as gaps."
+          }
+        }
+      }
+    },
+    "fired": {
+      "type": "object",
+      "description": "Keyed by trigger id. The dedup ledger.",
+      "additionalProperties": { "$ref": "#/$defs/fired_entry" }
+    },
+    "position_state": {
+      "type": "object",
+      "description": "Keyed by position id. Tracks what the client has already been told about each open position so the desk does not repeat itself.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "last_reported_at": { "type": "string", "format": "date-time" },
+          "last_reported_pnl_pct": { "type": ["number", "null"] },
+          "stage_notified": {
+            "type": "array",
+            "items": { "enum": ["target_1", "target_2", "stop_proximity", "stop_hit", "theta_warning", "eod_close_warning"] },
+            "description": "Each stage is announced once. Re-announcing 'approaching stop' every 15 minutes is noise, not risk management."
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "fired_entry": {
+      "type": "object",
+      "required": ["first_fired_at", "last_fired_at", "count"],
+      "properties": {
+        "first_fired_at": { "type": "string", "format": "date-time" },
+        "last_fired_at": { "type": "string", "format": "date-time" },
+        "count": { "type": "integer", "minimum": 1 },
+        "cooldown_until": { "type": ["string", "null"], "format": "date-time" },
+        "suppressed": {
+          "type": "boolean",
+          "description": "Set when max_fires is reached. The trigger stays evaluated (so the record is complete) but stops alerting."
+        },
+        "observed_values": {
+          "type": "array",
+          "description": "What the field actually read each time it fired. This is what lets you grade trigger quality at the close instead of guessing.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "at": { "type": "string", "format": "date-time" },
+              "value": {},
+              "underlying_price": { "type": ["number", "null"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

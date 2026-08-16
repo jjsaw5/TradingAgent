@@ -1,0 +1,163 @@
+{
+  "schema_version": "1.0",
+  "session_date": "2026-08-14",
+  "generated_at": "2026-08-14T13:02:11Z",
+  "frozen": true,
+  "revisions": [],
+  "sources": {
+    "brief": "state/briefs/2026-08-14.json",
+    "flow": "state/flow/2026-08-14.json",
+    "degraded": false
+  },
+  "regime": {
+    "stance": "two_sided",
+    "summary": "Market tide net-positive into the open but concentrated in two semis names rather than broad. VIX term structure in mild contango, so premium is not cheap. CPI at 08:30 already cleared without a surprise, which removes the main scheduled risk but also the main catalyst. Treating this as a stock-picker's tape, not an index tape.",
+    "vix": 14.8,
+    "spx_key_levels": { "support": [6412, 6388], "resistance": [6455, 6470] },
+    "regime_invalidation": "SPY loses 640.50 on volume above the 20-day average pace, or VIX prints above 17.5. Either means the two-sided read is wrong and this is a directional risk-off day."
+  },
+  "capital": {
+    "max_risk_per_trade": 100,
+    "max_open_risk": 300,
+    "max_concurrent_positions": 4,
+    "max_contracts_per_trade": 20
+  },
+  "names": [
+    {
+      "ticker": "MU",
+      "rank": 1,
+      "bias": "long_calls",
+      "thesis": "Third consecutive session of ask-side call accumulation in the same weekly strike while the stock has gone nowhere — flow is leading price, not confirming it.",
+      "evidence": {
+        "flow": {
+          "signal": "repeat_sweep",
+          "premium": 4180000,
+          "contracts": ["MU260821C00142000"],
+          "dte_range": [5, 7],
+          "ask_side_pct": 78.4,
+          "repeat_days": 3,
+          "detail": "Same 142 strike accumulating Tue/Wed/Thu. OI up 31% over the three sessions while the underlying is net -0.4%. Sweeps, not blocks — somebody is paying up rather than working an order.",
+          "source_capture": "state/raw/2026-08-14/option_activity_unusual-124512.json"
+        },
+        "macro": "Semis were the one sector the brief flagged as carrying real net premium today, so this runs with the tape rather than against it.",
+        "technical": "Coiled under 138.50, which has capped it four times since July 29.",
+        "positioning": "Max pain at 136 with the gamma flip just below at 135.20 — dealers are short gamma above 139, which would accelerate a break rather than dampen it."
+      },
+      "iv_context": {
+        "iv_rank": 38.2,
+        "term_structure": "contango",
+        "note": "IV rank in the lower third, so we are buying reasonably priced premium rather than paying up into an event. Debit spread still preferred over a naked long to cut theta."
+      },
+      "catalyst": { "type": "none", "date": null, "note": "Earnings not until Sept 24 — this is not an earnings positioning trade." },
+      "levels": {
+        "reference_price": 137.42,
+        "reference_at": "2026-08-14T13:00:00Z",
+        "entry_zone": [138.6, 139.4],
+        "invalidation": 135.1,
+        "targets": [143.0, 146.5]
+      },
+      "structure_hint": "Debit call spread, 5-7 DTE, 140/145. Do not chase above 140 — the risk/reward is built on entering near the breakout, not after it.",
+      "conviction": "high",
+      "triggers": [
+        {
+          "id": "MU:price_cross:138.50",
+          "type": "price_cross",
+          "urgency": "action",
+          "condition": { "field": "last_price", "op": "crosses_above", "value": 138.5, "window_minutes": null },
+          "cooldown_minutes": 45,
+          "max_fires": 2,
+          "note": "MU broke the level that has capped it four times since late July. This is the entry the thesis was built around."
+        },
+        {
+          "id": "MU:price_cross:135.10",
+          "type": "price_cross",
+          "urgency": "risk",
+          "condition": { "field": "last_price", "op": "crosses_below", "value": 135.1 },
+          "cooldown_minutes": 60,
+          "max_fires": 1,
+          "note": "MU below 135.10 — the accumulation thesis is wrong. Stand down for the session."
+        },
+        {
+          "id": "MU:flow_reversal:put_side",
+          "type": "flow_reversal",
+          "urgency": "action",
+          "condition": { "field": "net_put_premium", "op": ">", "value": 2000000, "window_minutes": 30 },
+          "cooldown_minutes": 60,
+          "max_fires": 2,
+          "note": "Put premium building against the call accumulation. Whoever was buying may be hedging or unwinding."
+        }
+      ]
+    },
+    {
+      "ticker": "XLE",
+      "rank": 2,
+      "bias": "watch_only",
+      "thesis": "Dark pool accumulation under 92 for four sessions with no matching options flow — interesting, but not yet a trade.",
+      "evidence": {
+        "flow": {
+          "signal": "darkpool_accumulation",
+          "premium": null,
+          "contracts": null,
+          "dte_range": null,
+          "ask_side_pct": null,
+          "repeat_days": 4,
+          "detail": "Repeated large prints between 91.40 and 91.90. No corroborating options flow, which is why this is watch_only rather than actionable.",
+          "source_capture": "state/raw/2026-08-14/darkpool_recent-124530.json"
+        },
+        "macro": "Energy was neutral in the sector tide — no tailwind here.",
+        "technical": null,
+        "positioning": null
+      },
+      "iv_context": { "iv_rank": 22.1, "term_structure": "flat", "note": "IV is cheap but there is no catalyst to make it expand." },
+      "catalyst": null,
+      "levels": {
+        "reference_price": 91.85,
+        "reference_at": "2026-08-14T13:00:00Z",
+        "entry_zone": null,
+        "invalidation": 90.4,
+        "targets": null
+      },
+      "structure_hint": null,
+      "conviction": "low",
+      "triggers": [
+        {
+          "id": "XLE:flow_surge:call_confirm",
+          "type": "flow_surge",
+          "urgency": "info",
+          "condition": { "field": "net_call_premium", "op": ">", "value": 1500000, "window_minutes": 60 },
+          "cooldown_minutes": 90,
+          "max_fires": 2,
+          "note": "Options flow finally confirming the dark pool accumulation in XLE. This is what would turn it into a trade."
+        }
+      ]
+    },
+    {
+      "ticker": "SPY",
+      "rank": 3,
+      "bias": "watch_only",
+      "thesis": "Carrier for the regime-break trigger. Not a trade in itself.",
+      "evidence": {
+        "flow": null,
+        "macro": "The brief's invalidation is expressed on SPY, so it needs to be on the monitored list for the trigger to be evaluated at all.",
+        "technical": null,
+        "positioning": null
+      },
+      "iv_context": null,
+      "catalyst": null,
+      "levels": { "reference_price": 643.18, "reference_at": "2026-08-14T13:00:00Z", "entry_zone": null, "invalidation": 640.5, "targets": null },
+      "structure_hint": null,
+      "conviction": "low",
+      "triggers": [
+        {
+          "id": "SPY:regime_break:640.50",
+          "type": "regime_break",
+          "urgency": "risk",
+          "condition": { "field": "last_price", "op": "crosses_below", "value": 640.5 },
+          "cooldown_minutes": 120,
+          "max_fires": 1,
+          "note": "The day's two-sided read is broken — SPY lost 640.50. Every name on the list is now suspect and long-call exposure should be reassessed."
+        }
+      ]
+    }
+  ]
+}

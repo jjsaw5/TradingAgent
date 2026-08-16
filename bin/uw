@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+#
+# uw — a thin, auditable wrapper over the Unusual Whales REST API.
+#
+# Why this exists when the UW MCP server is also wired up (.mcp.json):
+#
+#   MCP is for exploration. This is for the scheduled pulls.
+#
+#   Every call made through this script writes its raw, unmodified response to
+#   state/raw/<date>/ before anything reads it. That is what makes a trading day
+#   replayable: you can re-run the flow analyst against the exact bytes UW
+#   returned at 08:45 last Tuesday. An MCP tool call leaves no such artifact.
+#
+#   It also gives us one place to count requests against the daily quota, and one
+#   place that guarantees a failed call is *loud* rather than quietly empty.
+#
+# Usage:
+#   uw get <path> [key=value ...]        # path may omit the leading /api
+#   uw get stock/NVDA/flow-alerts limit=50
+#   uw get option-activity/unusual min_premium=100000 max_dte=14
+#   uw get market/market-tide
+#   uw budget                            # requests used today
+#   uw ping                              # verify credentials
+#
+# Flags (must come before the path):
+#   --no-capture    do not persist the raw response (use for polling loops)
+#   --quiet         suppress the stderr provenance line
+#
+# Contract:
+#   - stdout is the response body and NOTHING else. Safe to pipe into jq.
+#   - Any non-2xx status exits non-zero and prints nothing to stdout. A caller
+#     that ignores the exit code gets empty input, never plausible-looking
+#     wrong data.
+#   - The token is read from the environment and is never echoed, never written
+#     to a capture file, and never appears in an error message.
+
+set -euo pipefail
+
+API_ROOT="https://api.unusualwhales.com"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CAPTURE=1
+QUIET=0
+
+die() { printf 'uw: %s\n' "$*" >&2; exit 1; }
+
+# Load .env if present, without exporting it into the caller's shell history.
+if [[ -f "$REPO_ROOT/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/.env"
+  set +a
+fi
+
+# Checked per-subcommand rather than up front: `budget` only reads a local counter
+# and must stay usable on a container that has no credentials yet.
+require_token() {
+  [[ -n "${UW_API_TOKEN:-}" ]] || die "UW_API_TOKEN is not set. Copy .env.example to .env and fill it in. Never commit .env."
+}
+
+# ---------------------------------------------------------------- subcommands
+
+cmd_budget() {
+  local day counter
+  day="$(date -u +%Y-%m-%d)"
+  counter="$REPO_ROOT/state/raw/$day/.requests"
+  if [[ -f "$counter" ]]; then
+    printf 'requests logged on %s: %s\n' "$day" "$(cat "$counter")"
+  else
+    printf 'requests logged on %s: 0\n' "$day"
+  fi
+}
+
+cmd_ping() {
+  require_token
+  local code
+  code="$(curl -sS -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $UW_API_TOKEN" \
+    -H 'Accept: application/json' \
+    --max-time 30 \
+    "$API_ROOT/api/market/economic-calendar" || true)"
+  case "$code" in
+    200) echo "ok: credentials accepted" ;;
+    401|403) die "credentials rejected (HTTP $code). Check UW_API_TOKEN and that your plan includes API access." ;;
+    "") die "no response from $API_ROOT — network or proxy problem." ;;
+    *) die "unexpected status HTTP $code from $API_ROOT" ;;
+  esac
+}
+
+cmd_get() {
+  require_token
+  [[ $# -ge 1 ]] || die "usage: uw get <path> [key=value ...]"
+
+  local path="$1"; shift
+  path="${path#/}"
+  [[ "$path" == api/* ]] || path="api/$path"
+
+  # Build the query string. Values are URL-encoded by curl via --get --data-urlencode.
+  local -a curl_args=(
+    -sS
+    --get
+    --max-time 45
+    -H "Authorization: Bearer $UW_API_TOKEN"
+    -H 'Accept: application/json'
+    -w '\n%{http_code}'
+  )
+  local pair
+  for pair in "$@"; do
+    [[ "$pair" == *=* ]] || die "query params must be key=value, got: $pair"
+    curl_args+=(--data-urlencode "$pair")
+  done
+
+  local response status body
+  response="$(curl "${curl_args[@]}" "$API_ROOT/$path" || true)"
+  [[ -n "$response" ]] || die "no response from $API_ROOT/$path — network or proxy problem."
+
+  status="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+
+  # Count the request whether or not it succeeded — a 429 still spends quota.
+  local day dir counter
+  day="$(date -u +%Y-%m-%d)"
+  dir="$REPO_ROOT/state/raw/$day"
+  mkdir -p "$dir"
+  counter="$dir/.requests"
+  printf '%s\n' "$(( $( [[ -f "$counter" ]] && cat "$counter" || echo 0 ) + 1 ))" > "$counter"
+
+  case "$status" in
+    2*) : ;;
+    401|403) die "HTTP $status on /$path — credentials rejected or endpoint not included in your plan." ;;
+    404) die "HTTP 404 on /$path — no such endpoint. Check docs/UW_ENDPOINTS.md for the exact path." ;;
+    422) die "HTTP 422 on /$path — bad parameters. UW said: $(printf '%s' "$body" | head -c 400)" ;;
+    429) die "HTTP 429 on /$path — daily request quota exhausted. Used today: $(cat "$counter")." ;;
+    5*) die "HTTP $status on /$path — UW server error. Do not retry in a tight loop." ;;
+    *) die "HTTP $status on /$path" ;;
+  esac
+
+  if [[ "$CAPTURE" -eq 1 ]]; then
+    local slug stamp file
+    slug="$(printf '%s' "$path" | sed 's|^api/||; s|[^A-Za-z0-9]|_|g')"
+    stamp="$(date -u +%H%M%S)"
+    file="$dir/${slug}-${stamp}.json"
+    printf '%s' "$body" > "$file"
+    [[ "$QUIET" -eq 1 ]] || printf 'uw: /%s -> %s\n' "$path" "${file#"$REPO_ROOT"/}" >&2
+  fi
+
+  printf '%s' "$body"
+}
+
+# ---------------------------------------------------------------------- entry
+
+while [[ $# -gt 0 && "$1" == --* ]]; do
+  case "$1" in
+    --no-capture) CAPTURE=0; shift ;;
+    --quiet) QUIET=1; shift ;;
+    *) die "unknown flag: $1" ;;
+  esac
+done
+
+[[ $# -ge 1 ]] || die "usage: uw <get|budget|ping> ..."
+
+sub="$1"; shift
+case "$sub" in
+  get) cmd_get "$@" ;;
+  budget) cmd_budget ;;
+  ping) cmd_ping ;;
+  *) die "unknown subcommand: $sub (expected get, budget, or ping)" ;;
+esac

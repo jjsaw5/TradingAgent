@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://market-desk/schemas/watchlist.schema.json",
+  "title": "Watchlist of Record",
+  "description": "The single handoff artifact of the trading day. Written once by the desk at the open, immutable for the session. The monitor reads this and nothing else — it has no license to discover new names. Anything interesting the monitor sees off-list is an input to TOMORROW's flow analysis, not today's trade.",
+  "type": "object",
+  "required": ["schema_version", "session_date", "generated_at", "sources", "regime", "names", "capital"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "session_date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "description": "Trading date in the desk timezone."
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "frozen": {
+      "type": "boolean",
+      "default": true,
+      "description": "Once true the name list may not be extended intraday. Levels may be revised by the desk with an appended revision entry; names may not be added."
+    },
+    "revisions": {
+      "type": "array",
+      "description": "Append-only. Any intraday change to a level or trigger lands here with a reason. The original value is never overwritten in place.",
+      "items": {
+        "type": "object",
+        "required": ["at", "ticker", "field", "from", "to", "reason"],
+        "properties": {
+          "at": { "type": "string", "format": "date-time" },
+          "ticker": { "type": "string" },
+          "field": { "type": "string" },
+          "from": {},
+          "to": {},
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "sources": {
+      "type": "object",
+      "description": "Provenance. Which upstream artifacts this watchlist was built from.",
+      "required": ["brief", "flow"],
+      "properties": {
+        "brief": { "type": ["string", "null"], "description": "Path to the market brief artifact, or null if the brief agent failed." },
+        "flow": { "type": ["string", "null"], "description": "Path to the flow candidates artifact, or null if the flow agent failed." },
+        "degraded": {
+          "type": "boolean",
+          "description": "True when any upstream stage failed. A degraded watchlist is still tradeable but the client is told which leg is missing."
+        }
+      }
+    },
+    "regime": {
+      "type": "object",
+      "description": "The one-paragraph read of the tape that everything on the list is conditioned on. If this breaks, the whole list is suspect — that is what regime_invalidation is for.",
+      "required": ["stance", "summary", "regime_invalidation"],
+      "properties": {
+        "stance": { "enum": ["risk_on", "risk_off", "neutral", "two_sided", "no_read"] },
+        "summary": { "type": "string", "maxLength": 600 },
+        "vix": { "type": ["number", "null"] },
+        "spx_key_levels": {
+          "type": "object",
+          "properties": {
+            "support": { "type": "array", "items": { "type": "number" } },
+            "resistance": { "type": "array", "items": { "type": "number" } }
+          }
+        },
+        "regime_invalidation": {
+          "type": "string",
+          "description": "The observable event that would mean this read is wrong. Must be checkable by the monitor."
+        }
+      }
+    },
+    "capital": {
+      "type": "object",
+      "description": "Risk envelope for the session. The desk owns these; the monitor enforces them.",
+      "required": ["max_risk_per_trade", "max_open_risk", "max_concurrent_positions"],
+      "properties": {
+        "max_risk_per_trade": { "type": "number", "exclusiveMinimum": 0 },
+        "max_open_risk": { "type": "number", "exclusiveMinimum": 0 },
+        "max_concurrent_positions": { "type": "integer", "minimum": 1 },
+        "max_contracts_per_trade": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "names": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 12,
+      "description": "Ranked. Cap is deliberate: the monitor's cost and the client's attention both scale with this number. An empty list is a legitimate and sometimes correct output — say so plainly rather than manufacturing names.",
+      "items": { "$ref": "#/$defs/name" }
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "object",
+      "required": ["ticker", "rank", "bias", "thesis", "evidence", "levels", "conviction", "triggers"],
+      "additionalProperties": false,
+      "properties": {
+        "ticker": { "type": "string", "pattern": "^[A-Z.\\-]{1,10}$" },
+        "rank": { "type": "integer", "minimum": 1 },
+        "bias": {
+          "enum": ["long_calls", "long_puts", "long_vol", "short_vol", "two_sided", "watch_only"],
+          "description": "watch_only means: interesting, not yet actionable. It still gets monitored."
+        },
+        "thesis": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "One sentence a client would understand. If it takes a paragraph, the thesis is not clear enough to trade."
+        },
+        "evidence": {
+          "type": "object",
+          "description": "Why this name is here. Each field is null when that line of evidence is absent — never a zero, never an empty string standing in for 'we did not look'.",
+          "required": ["flow"],
+          "properties": {
+            "flow": {
+              "type": ["object", "null"],
+              "description": "The UW observation that surfaced this name.",
+              "properties": {
+                "signal": { "type": "string", "description": "e.g. repeat_sweep, oi_build, darkpool_accumulation, net_premium_divergence" },
+                "premium": { "type": ["number", "null"] },
+                "contracts": { "type": ["array", "null"], "items": { "type": "string" }, "description": "OCC symbols observed." },
+                "dte_range": { "type": ["array", "null"], "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+                "ask_side_pct": { "type": ["number", "null"] },
+                "repeat_days": { "type": ["integer", "null"], "description": "How many consecutive sessions this flow has printed. Repeat is the highest-value signal in this dataset and the one most often missed by a single-day scan." },
+                "detail": { "type": "string" }
+              }
+            },
+            "macro": { "type": ["string", "null"], "description": "How the brief's regime read bears on this name, or null if it does not." },
+            "technical": { "type": ["string", "null"] },
+            "positioning": { "type": ["string", "null"], "description": "GEX / max pain / OI structure context." }
+          }
+        },
+        "iv_context": {
+          "type": ["object", "null"],
+          "properties": {
+            "iv_rank": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+            "term_structure": { "enum": ["contango", "backwardation", "flat", null] },
+            "note": { "type": ["string", "null"], "description": "Whether we are buying or selling premium into this, and why that is the right side." }
+          }
+        },
+        "catalyst": {
+          "type": ["object", "null"],
+          "properties": {
+            "type": { "enum": ["earnings", "fda", "econ_print", "product", "macro_event", "none", null] },
+            "date": { "type": ["string", "null"] },
+            "note": { "type": ["string", "null"] }
+          }
+        },
+        "levels": {
+          "type": "object",
+          "description": "Prices, all on the underlying unless noted. reference_price is what everything else was computed against — without it the levels cannot be audited later.",
+          "required": ["reference_price", "invalidation"],
+          "properties": {
+            "reference_price": { "type": ["number", "null"] },
+            "reference_at": { "type": ["string", "null"], "format": "date-time" },
+            "entry_zone": { "type": ["array", "null"], "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+            "invalidation": {
+              "type": ["number", "null"],
+              "description": "Below/above this the thesis is wrong. Not a stop-loss on the option — a statement about the underlying."
+            },
+            "targets": { "type": ["array", "null"], "items": { "type": "number" } }
+          }
+        },
+        "structure_hint": {
+          "type": ["string", "null"],
+          "description": "Suggested expression, e.g. 'debit call spread 2-3 DTE'. A hint, never an order. The desk sizes and the human decides."
+        },
+        "conviction": { "enum": ["high", "medium", "low"] },
+        "triggers": {
+          "type": "array",
+          "description": "THE critical field. This is what the monitor watches. The monitor evaluates these mechanically and does not invent its own — that is what keeps it cheap, fast and non-hallucinating.",
+          "items": { "$ref": "#/$defs/trigger" }
+        }
+      }
+    },
+    "trigger": {
+      "type": "object",
+      "required": ["id", "type", "urgency", "condition"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable dedup key, e.g. 'NVDA:price_cross:182.50'. The monitor keys its alert state on this, so it must not change intraday."
+        },
+        "type": {
+          "enum": [
+            "price_cross",
+            "price_reject",
+            "flow_surge",
+            "flow_reversal",
+            "net_premium_divergence",
+            "darkpool_print",
+            "iv_shift",
+            "gex_level",
+            "volume_pace",
+            "catalyst_time",
+            "regime_break"
+          ]
+        },
+        "urgency": {
+          "enum": ["info", "action", "risk"],
+          "description": "info: log only. action: an opportunity, batchable into the next cycle summary. risk: interrupt the client now. Only positions and regime breaks should ever be 'risk'."
+        },
+        "condition": {
+          "type": "object",
+          "description": "Machine-checkable. The monitor must be able to evaluate this from a UW response without judgement.",
+          "properties": {
+            "field": { "type": "string", "description": "e.g. last_price, net_call_premium, iv_rank" },
+            "op": { "enum": [">", ">=", "<", "<=", "crosses_above", "crosses_below", "abs_change_pct"] },
+            "value": {},
+            "window_minutes": { "type": ["integer", "null"] }
+          }
+        },
+        "cooldown_minutes": {
+          "type": "integer",
+          "default": 30,
+          "description": "After firing, suppress this id for this many minutes. Without this the monitor re-alerts the same level every cycle for four hours and the client mutes the desk by 10am."
+        },
+        "max_fires": {
+          "type": ["integer", "null"],
+          "default": 3,
+          "description": "Hard cap per session. null means unlimited, which should be rare."
+        },
+        "note": { "type": "string", "description": "What this trigger means, in client language, for use in the alert text." }
+      }
+    }
+  }
+}

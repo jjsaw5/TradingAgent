@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://market-desk/schemas/flow_candidates.schema.json",
+  "title": "Flow Candidates",
+  "description": "Output of the flow-analyst agent: a ranked, evidenced list of names that unusual options activity says are worth attention today. This is a CANDIDATE list, not a watchlist — the desk still has to reconcile it against the macro brief and the risk envelope before anything becomes tradeable.",
+  "type": "object",
+  "required": ["schema_version", "session_date", "generated_at", "scan_config", "candidates", "rejected", "gaps"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "session_date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "scan_config": {
+      "type": "object",
+      "description": "Exactly what was scanned, so a candidate list can be reproduced or compared across days. If the filters move, the list is not comparable to yesterday's and the desk needs to know that.",
+      "required": ["endpoints_used", "filters"],
+      "properties": {
+        "endpoints_used": { "type": "array", "items": { "type": "string" } },
+        "filters": {
+          "type": "object",
+          "properties": {
+            "min_premium": { "type": ["number", "null"] },
+            "max_dte": { "type": ["integer", "null"] },
+            "min_ask_side_pct": { "type": ["number", "null"] },
+            "exclude_tickers": { "type": "array", "items": { "type": "string" } },
+            "min_underlying_price": { "type": ["number", "null"] },
+            "require_optionable_liquidity": { "type": "boolean" }
+          }
+        },
+        "universe_size": { "type": ["integer", "null"], "description": "How many distinct tickers came back before ranking. Context for how selective the shortlist actually is." }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["ticker", "rank", "score_rationale", "signals", "direction", "liquidity"],
+        "properties": {
+          "ticker": { "type": "string", "pattern": "^[A-Z.\\-]{1,10}$" },
+          "rank": { "type": "integer", "minimum": 1 },
+          "direction": { "enum": ["bullish", "bearish", "mixed", "unclear"] },
+          "score_rationale": {
+            "type": "string",
+            "maxLength": 400,
+            "description": "Why this ranks where it does, in plain terms. No numeric composite score — an unvalidated score implies a precision this has not earned. Ordinal ranking with a stated reason is honest; a 0-100 score is not."
+          },
+          "signals": {
+            "type": "array",
+            "minItems": 1,
+            "description": "The concrete observations. Each must be traceable to a captured raw response.",
+            "items": {
+              "type": "object",
+              "required": ["kind", "detail"],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "repeat_sweep",
+                    "single_large_sweep",
+                    "block_trade",
+                    "oi_build",
+                    "net_premium_divergence",
+                    "darkpool_accumulation",
+                    "iv_rank_extreme",
+                    "gex_pin_risk",
+                    "insider_buying",
+                    "congress_trade",
+                    "institutional_filing",
+                    "short_interest",
+                    "volume_anomaly"
+                  ]
+                },
+                "detail": { "type": "string" },
+                "premium": { "type": ["number", "null"] },
+                "contracts": { "type": ["array", "null"], "items": { "type": "string" } },
+                "ask_side_pct": { "type": ["number", "null"] },
+                "dte": { "type": ["integer", "null"] },
+                "repeat_days": { "type": ["integer", "null"] },
+                "source_capture": { "type": ["string", "null"], "description": "Path under state/raw/ containing the response this came from." }
+              }
+            }
+          },
+          "liquidity": {
+            "type": "object",
+            "description": "Non-negotiable gate. A perfect thesis in a chain you cannot get filled in is not a trade. Wide-spread names get rejected here, not discovered at the point of entry.",
+            "required": ["tradeable"],
+            "properties": {
+              "tradeable": { "type": "boolean" },
+              "typical_spread_pct": { "type": ["number", "null"] },
+              "chain_oi": { "type": ["number", "null"] },
+              "note": { "type": ["string", "null"] }
+            }
+          },
+          "iv_rank": { "type": ["number", "null"] },
+          "next_earnings": { "type": ["string", "null"] },
+          "sector": { "type": ["string", "null"] },
+          "counter_evidence": {
+            "type": ["string", "null"],
+            "description": "REQUIRED THINKING even when the value is null: what argues against this name. A candidate with no counter-evidence considered has not been analysed, only found."
+          }
+        }
+      }
+    },
+    "rejected": {
+      "type": "array",
+      "description": "Names that scanned well but were dropped, with the reason. This is not bookkeeping — it is how you find out the filters are wrong. A name rejected for liquidity five days running that then runs 20% is a filter problem worth seeing.",
+      "items": {
+        "type": "object",
+        "required": ["ticker", "reason"],
+        "properties": {
+          "ticker": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "description": "Endpoints that failed or returned nothing, and what that means the analysis could not see. Required; an empty array is a claim that the scan was complete.",
+      "items": {
+        "type": "object",
+        "required": ["what", "why"],
+        "properties": {
+          "what": { "type": "string" },
+          "why": { "type": "string" },
+          "impact": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

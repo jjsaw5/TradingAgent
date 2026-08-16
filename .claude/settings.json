@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(bin/uw:*)",
+      "Bash(./bin/uw:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(date:*)",
+      "Bash(jq:*)",
+      "Bash(mkdir -p state/*)",
+      "Read(./state/**)",
+      "Read(./schemas/**)",
+      "Write(./state/**)",
+      "mcp__Robinhood__get_option_positions",
+      "mcp__Robinhood__get_equity_positions",
+      "mcp__Robinhood__get_portfolio",
+      "mcp__Robinhood__get_accounts",
+      "mcp__Robinhood__get_option_quotes",
+      "mcp__Robinhood__get_equity_quotes",
+      "mcp__Robinhood__get_option_historicals",
+      "mcp__Robinhood__get_realized_pnl",
+      "mcp__Robinhood__get_pnl_trade_history"
+    ],
+    "deny": [
+      "Bash(cat .env)",
+      "Bash(cat:*.env)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "mcp__Robinhood__place_option_order",
+      "mcp__Robinhood__place_equity_order",
+      "mcp__Robinhood__cancel_option_order",
+      "mcp__Robinhood__cancel_equity_order",
+      "mcp__Robinhood__exercise_option",
+      "mcp__Robinhood__cancel_option_exercise",
+      "mcp__Robinhood__review_option_order",
+      "mcp__Robinhood__review_equity_order"
+    ]
+  }
+}

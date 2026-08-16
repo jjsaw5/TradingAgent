@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""
+validate — check a desk artifact against its schema.
+
+Agents must run this before writing any artifact. A watchlist that does not
+validate is not a contract, and the monitor depends on it being one.
+
+Usage:
+    bin/validate state/watchlist/2026-08-14.json
+    bin/validate --all                    # every artifact in state/ + examples/
+    bin/validate --schema watchlist path/to/file.json
+
+Schema is inferred from the path when not given explicitly:
+    state/watchlist/*  -> watchlist          state/alerts/*   -> alert_state
+    state/briefs/*     -> market_brief       state/flow/*     -> flow_candidates
+"""
+
+import json
+import sys
+from pathlib import Path
+
+try:
+    from jsonschema import Draft202012Validator
+except ImportError:
+    sys.exit("validate: jsonschema is not installed. Run: pip install jsonschema")
+
+ROOT = Path(__file__).resolve().parent.parent
+SCHEMA_DIR = ROOT / "schemas"
+
+INFER = {
+    "watchlist": "watchlist",
+    "alerts": "alert_state",
+    "briefs": "market_brief",
+    "flow": "flow_candidates",
+}
+
+
+def infer_schema(path: Path) -> str | None:
+    for part in path.parts:
+        if part in INFER:
+            return INFER[part]
+    for key in INFER.values():
+        if path.stem.startswith(key) or key in path.stem:
+            return key
+    return None
+
+
+def validate(path: Path, schema_name: str) -> list[str]:
+    schema_path = SCHEMA_DIR / f"{schema_name}.schema.json"
+    if not schema_path.exists():
+        return [f"no such schema: {schema_path.name}"]
+
+    try:
+        instance = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        return [f"not valid JSON: {exc}"]
+
+    validator = Draft202012Validator(json.loads(schema_path.read_text()))
+    errors = sorted(validator.iter_errors(instance), key=lambda e: list(e.path))
+    return [
+        f"{'/'.join(str(p) for p in e.path) or '<root>'}: {e.message}" for e in errors
+    ]
+
+
+def main(argv: list[str]) -> int:
+    schema_override = None
+    if "--schema" in argv:
+        i = argv.index("--schema")
+        schema_override = argv[i + 1]
+        del argv[i : i + 2]
+
+    if "--all" in argv:
+        targets = [
+            p
+            for d in ("state", "examples")
+            for p in (ROOT / d).rglob("*.json")
+            if "raw" not in p.parts
+        ]
+    else:
+        targets = [Path(a) for a in argv[1:]]
+
+    if not targets:
+        print(__doc__.strip())
+        return 2
+
+    failed = 0
+    for path in targets:
+        if not path.exists():
+            print(f"MISSING  {path}")
+            failed += 1
+            continue
+
+        schema_name = schema_override or infer_schema(path)
+        if schema_name is None:
+            print(f"SKIP     {path}  (cannot infer schema; pass --schema)")
+            continue
+
+        errors = validate(path, schema_name)
+        if errors:
+            failed += 1
+            print(f"FAIL     {path}  [{schema_name}]")
+            for err in errors[:15]:
+                print(f"           {err}")
+            if len(errors) > 15:
+                print(f"           ... and {len(errors) - 15} more")
+        else:
+            print(f"ok       {path}  [{schema_name}]")
+
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

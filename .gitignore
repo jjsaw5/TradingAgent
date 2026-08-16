@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+
+# Raw UW captures are large and are regenerated every session. Keep the
+# directory, drop the payloads — the derived artifacts in state/briefs,
+# state/flow and state/watchlist are the durable record.
+state/raw/**
+!state/raw/.gitkeep
+
+.DS_Store
+*.pyc
+__pycache__/
+node_modules/
