@@ -765,6 +765,8 @@ def build_ticket(print_id: str, event, playbook, ref, now=None):
 def ladder_brier(rows, printed, step):
     """Mean squared error across the ladder for the model and for the market mid.
     The realized indicator per strike follows the print's rounding rule."""
+    if printed is None:
+        return None, None
     bm, bk, n = 0.0, 0.0, 0
     for r in rows:
         if r["p_model"] is None:
@@ -992,7 +994,13 @@ def replay_market(print_id: str, playbook):
             eprint(f"prints: skip {ev}: {e}")
             skipped += 1
             continue
-        printed = fnum(ms[0].get("expiration_value"))
+        printed = next((fnum(m.get("expiration_value")) for m in ms if fnum(m.get("expiration_value")) is not None), None)
+        if printed is None:
+            # Kalshi settled the ladder without publishing the print value. Without
+            # the value nothing can be graded; it is a skipped event, not a zero.
+            eprint(f"prints: skip {ev}: no settlement value published")
+            skipped += 1
+            continue
         rows = []
         for m in sorted(ms, key=lambda m: fnum(m["floor_strike"])):
             try:

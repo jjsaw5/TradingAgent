@@ -1,0 +1,70 @@
+{
+  "print": "CLAIMS",
+  "model": "claims_ar_v1",
+  "n": 156,
+  "first": "2023-09-09",
+  "last": "2026-08-29",
+  "mean_abs_error": 7167.3878,
+  "naive_last_value_mae": 7554.8387,
+  "mean_sigma": 9605.8691,
+  "coverage_1sigma": 0.712,
+  "coverage_2sigma": 0.936,
+  "z_mean": -0.023,
+  "z_stdev": 1.001,
+  "pit_histogram_deciles": [
+    12,
+    18,
+    18,
+    14,
+    25,
+    19,
+    11,
+    13,
+    11,
+    15
+  ],
+  "synthetic_ladder_brier": 0.2393,
+  "last_periods": [
+    {
+      "period": "2026-07-25",
+      "actual": 198000.0,
+      "mean": 196600.0,
+      "sigma": 9617.2824
+    },
+    {
+      "period": "2026-08-01",
+      "actual": 200000.0,
+      "mean": 200100.0,
+      "sigma": 9539.7386
+    },
+    {
+      "period": "2026-08-08",
+      "actual": 212000.0,
+      "mean": 199600.0,
+      "sigma": 9498.0307
+    },
+    {
+      "period": "2026-08-15",
+      "actual": 207000.0,
+      "mean": 207100.0,
+      "sigma": 9550.9144
+    },
+    {
+      "period": "2026-08-22",
+      "actual": 204000.0,
+      "mean": 205900.0,
+      "sigma": 9550.5502
+    },
+    {
+      "period": "2026-08-29",
+      "actual": 206000.0,
+      "mean": 204700.0,
+      "sigma": 9551.1843
+    }
+  ],
+  "caveats": [
+    "Inputs are the current FRED vintage except payrolls, which uses ALFRED vintages as of the release eve. Seasonal factors and revisions flatter the monthly models slightly.",
+    "This measures whether the model's distribution is honest, not whether it beats the market. That needs settled Kalshi ladders (replay-market), of which there are few.",
+    "Coverage should be near 0.68 and 0.95; a z stdev far from 1 means sigma is mis-scaled; a lopsided PIT histogram means bias."
+  ]
+}

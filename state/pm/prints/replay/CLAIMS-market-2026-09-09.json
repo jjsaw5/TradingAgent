@@ -1,0 +1,132 @@
+{
+  "print": "CLAIMS",
+  "model": "claims_ar_v1",
+  "n_events": 8,
+  "skipped": 1,
+  "brier_model": 0.1091,
+  "brier_market": 0.089,
+  "model_beats_market": false,
+  "trades": 3,
+  "trade_pnl_total": 0.17,
+  "events": [
+    {
+      "event": "KXJOBLESSCLAIMS-26AUG06",
+      "period": "2026-08-01",
+      "printed": 199000.0,
+      "model_mean": 200100.0,
+      "model_sigma": 9539.7386,
+      "z": -0.115,
+      "brier_model": 0.0565,
+      "brier_market": 0.0603,
+      "n_quoted": 9,
+      "trade": null
+    },
+    {
+      "event": "KXJOBLESSCLAIMS-26AUG13",
+      "period": "2026-08-08",
+      "printed": 209000.0,
+      "model_mean": 199600.0,
+      "model_sigma": 9498.0307,
+      "z": 0.99,
+      "brier_model": 0.079,
+      "brier_market": 0.0991,
+      "n_quoted": 11,
+      "trade": null
+    },
+    {
+      "event": "KXJOBLESSCLAIMS-26AUG20",
+      "period": "2026-08-15",
+      "printed": 206000.0,
+      "model_mean": 207100.0,
+      "model_sigma": 9550.9144,
+      "z": -0.115,
+      "brier_model": 0.039,
+      "brier_market": 0.071,
+      "n_quoted": 8,
+      "trade": null
+    },
+    {
+      "event": "KXJOBLESSCLAIMS-26AUG27",
+      "period": "2026-08-22",
+      "printed": 203000.0,
+      "model_mean": 205900.0,
+      "model_sigma": 9550.5502,
+      "z": -0.304,
+      "brier_model": 0.0505,
+      "brier_market": 0.042,
+      "n_quoted": 10,
+      "trade": null
+    },
+    {
+      "event": "KXJOBLESSCLAIMS-26JUL16",
+      "period": "2026-07-11",
+      "printed": 208000.0,
+      "model_mean": 217900.0,
+      "model_sigma": 9443.7787,
+      "z": -1.048,
+      "brier_model": 0.1338,
+      "brier_market": 0.0998,
+      "n_quoted": 9,
+      "trade": {
+        "ticker": "KXJOBLESSCLAIMS-26JUL16-220000",
+        "side": "yes",
+        "ask": 0.25,
+        "ev": 0.1627,
+        "pnl": -0.27
+      }
+    },
+    {
+      "event": "KXJOBLESSCLAIMS-26JUL23",
+      "period": "2026-07-18",
+      "printed": 187000.0,
+      "model_mean": 211300.0,
+      "model_sigma": 9374.1616,
+      "z": -2.592,
+      "brier_model": 0.423,
+      "brier_market": 0.213,
+      "n_quoted": 8,
+      "trade": {
+        "ticker": "KXJOBLESSCLAIMS-26JUL23-210000",
+        "side": "yes",
+        "ask": 0.14,
+        "ev": 0.4161,
+        "pnl": -0.16
+      }
+    },
+    {
+      "event": "KXJOBLESSCLAIMS-26JUL30",
+      "period": "2026-07-25",
+      "printed": 197000.0,
+      "model_mean": 196600.0,
+      "model_sigma": 9617.2824,
+      "z": 0.042,
+      "brier_model": 0.0481,
+      "brier_market": 0.0839,
+      "n_quoted": 8,
+      "trade": {
+        "ticker": "KXJOBLESSCLAIMS-26JUL30-200000",
+        "side": "no",
+        "ask": 0.38,
+        "ev": 0.2185,
+        "pnl": 0.6
+      }
+    },
+    {
+      "event": "KXJOBLESSCLAIMS-26SEP03",
+      "period": "2026-08-29",
+      "printed": 206000.0,
+      "model_mean": 204700.0,
+      "model_sigma": 9551.1843,
+      "z": 0.136,
+      "brier_model": 0.043,
+      "brier_market": 0.0426,
+      "n_quoted": 8,
+      "trade": null
+    }
+  ],
+  "caveats": [
+    "Very few settled events exist on Kalshi per series (weeks of claims, a couple of months of the rest). This is a sanity check, not a track record.",
+    "Market quote is the last Kalshi minute-candle close on the eve of release; fills at that ask are the best case.",
+    "Model inputs as of the eve of release (ALFRED vintages for payrolls, current vintage otherwise)."
+  ]
+}

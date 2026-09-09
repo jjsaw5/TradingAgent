@@ -1,0 +1,54 @@
+{
+  "print": "CPI",
+  "model": "cpi_gas_core_v1",
+  "n_events": 2,
+  "skipped": 0,
+  "brier_model": 0.1028,
+  "brier_market": 0.1454,
+  "model_beats_market": true,
+  "trades": 2,
+  "trade_pnl_total": -0.33,
+  "events": [
+    {
+      "event": "KXCPI-26JUL",
+      "period": "2026-07",
+      "printed": 0.1,
+      "model_mean": 0.0784,
+      "model_sigma": 0.1838,
+      "z": 0.117,
+      "brier_model": 0.0422,
+      "brier_market": 0.0405,
+      "n_quoted": 5,
+      "trade": {
+        "ticker": "KXCPI-26JUL-T0.1",
+        "side": "yes",
+        "ask": 0.16,
+        "ev": 0.1685,
+        "pnl": -0.18
+      }
+    },
+    {
+      "event": "KXCPI-26JUN",
+      "period": "2026-06",
+      "printed": -0.4,
+      "model_mean": -0.0665,
+      "model_sigma": 0.181,
+      "z": -1.842,
+      "brier_model": 0.1633,
+      "brier_market": 0.2503,
+      "n_quoted": 4,
+      "trade": {
+        "ticker": "KXCPI-26JUN-T-0.1",
+        "side": "yes",
+        "ask": 0.13,
+        "ev": 0.3136,
+        "pnl": -0.15
+      }
+    }
+  ],
+  "caveats": [
+    "Very few settled events exist on Kalshi per series (weeks of claims, a couple of months of the rest). This is a sanity check, not a track record.",
+    "Market quote is the last Kalshi minute-candle close on the eve of release; fills at that ask are the best case.",
+    "Model inputs as of the eve of release (ALFRED vintages for payrolls, current vintage otherwise)."
+  ]
+}

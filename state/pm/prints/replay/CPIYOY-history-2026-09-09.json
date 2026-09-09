@@ -1,0 +1,70 @@
+{
+  "print": "CPIYOY",
+  "model": "cpi_yoy_v1",
+  "n": 59,
+  "first": "2021-07",
+  "last": "2026-07",
+  "mean_abs_error": 0.1784,
+  "naive_last_value_mae": 0.3328,
+  "mean_sigma": 0.1806,
+  "coverage_1sigma": 0.61,
+  "coverage_2sigma": 0.932,
+  "z_mean": 0.191,
+  "z_stdev": 1.297,
+  "pit_histogram_deciles": [
+    9,
+    2,
+    8,
+    2,
+    6,
+    3,
+    6,
+    10,
+    4,
+    9
+  ],
+  "synthetic_ladder_brier": 0.1656,
+  "last_periods": [
+    {
+      "period": "2026-02",
+      "actual": 2.9,
+      "mean": 2.5101,
+      "sigma": 0.1847
+    },
+    {
+      "period": "2026-03",
+      "actual": 3.5,
+      "mean": 3.5097,
+      "sigma": 0.1851
+    },
+    {
+      "period": "2026-04",
+      "actual": 4.1,
+      "mean": 3.7917,
+      "sigma": 0.1875
+    },
+    {
+      "period": "2026-05",
+      "actual": 4.5,
+      "mean": 4.2946,
+      "sigma": 0.1886
+    },
+    {
+      "period": "2026-06",
+      "actual": 3.9,
+      "mean": 3.9212,
+      "sigma": 0.188
+    },
+    {
+      "period": "2026-07",
+      "actual": 3.5,
+      "mean": 3.4334,
+      "sigma": 0.19
+    }
+  ],
+  "caveats": [
+    "Inputs are the current FRED vintage except payrolls, which uses ALFRED vintages as of the release eve. Seasonal factors and revisions flatter the monthly models slightly.",
+    "This measures whether the model's distribution is honest, not whether it beats the market. That needs settled Kalshi ladders (replay-market), of which there are few.",
+    "Coverage should be near 0.68 and 0.95; a z stdev far from 1 means sigma is mis-scaled; a lopsided PIT histogram means bias."
+  ]
+}

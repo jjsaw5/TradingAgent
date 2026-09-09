@@ -1,0 +1,54 @@
+{
+  "print": "PAYROLLS",
+  "model": "payrolls_trend_v1",
+  "n_events": 2,
+  "skipped": 0,
+  "brier_model": 0.3318,
+  "brier_market": 0.3517,
+  "model_beats_market": true,
+  "trades": 2,
+  "trade_pnl_total": -0.44,
+  "events": [
+    {
+      "event": "KXPAYROLLS-26AUG",
+      "period": "2026-08",
+      "printed": 162000.0,
+      "model_mean": 20000.0,
+      "model_sigma": 147188.0904,
+      "z": 0.965,
+      "brier_model": 0.2849,
+      "brier_market": 0.3022,
+      "n_quoted": 19,
+      "trade": {
+        "ticker": "KXPAYROLLS-26AUG-T-25000",
+        "side": "no",
+        "ask": 0.17,
+        "ev": 0.1912,
+        "pnl": -0.19
+      }
+    },
+    {
+      "event": "KXPAYROLLS-26JUL",
+      "period": "2026-07",
+      "printed": -23000.0,
+      "model_mean": 111333.3333,
+      "model_sigma": 157540.8893,
+      "z": -0.853,
+      "brier_model": 0.3788,
+      "brier_market": 0.4011,
+      "n_quoted": 13,
+      "trade": {
+        "ticker": "KXPAYROLLS-26JUL-T125000",
+        "side": "yes",
+        "ask": 0.23,
+        "ev": 0.2142,
+        "pnl": -0.25
+      }
+    }
+  ],
+  "caveats": [
+    "Very few settled events exist on Kalshi per series (weeks of claims, a couple of months of the rest). This is a sanity check, not a track record.",
+    "Market quote is the last Kalshi minute-candle close on the eve of release; fills at that ask are the best case.",
+    "Model inputs as of the eve of release (ALFRED vintages for payrolls, current vintage otherwise)."
+  ]
+}

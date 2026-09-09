@@ -1,0 +1,70 @@
+{
+  "print": "U3",
+  "model": "u3_rw_v1",
+  "n": 60,
+  "first": "2021-08",
+  "last": "2026-08",
+  "mean_abs_error": 0.105,
+  "naive_last_value_mae": 0.1017,
+  "mean_sigma": 0.2377,
+  "coverage_1sigma": 0.95,
+  "coverage_2sigma": 1.0,
+  "z_mean": -0.103,
+  "z_stdev": 0.577,
+  "pit_histogram_deciles": [
+    2,
+    2,
+    9,
+    12,
+    0,
+    17,
+    10,
+    7,
+    1,
+    0
+  ],
+  "synthetic_ladder_brier": 0.1146,
+  "last_periods": [
+    {
+      "period": "2026-03",
+      "actual": 4.3,
+      "mean": 4.4,
+      "sigma": 0.158
+    },
+    {
+      "period": "2026-04",
+      "actual": 4.3,
+      "mean": 4.3,
+      "sigma": 0.1568
+    },
+    {
+      "period": "2026-05",
+      "actual": 4.3,
+      "mean": 4.3,
+      "sigma": 0.1566
+    },
+    {
+      "period": "2026-06",
+      "actual": 4.2,
+      "mean": 4.3,
+      "sigma": 0.1566
+    },
+    {
+      "period": "2026-07",
+      "actual": 4.1,
+      "mean": 4.2,
+      "sigma": 0.1528
+    },
+    {
+      "period": "2026-08",
+      "actual": 4.1,
+      "mean": 4.1,
+      "sigma": 0.1522
+    }
+  ],
+  "caveats": [
+    "Inputs are the current FRED vintage except payrolls, which uses ALFRED vintages as of the release eve. Seasonal factors and revisions flatter the monthly models slightly.",
+    "This measures whether the model's distribution is honest, not whether it beats the market. That needs settled Kalshi ladders (replay-market), of which there are few.",
+    "Coverage should be near 0.68 and 0.95; a z stdev far from 1 means sigma is mis-scaled; a lopsided PIT histogram means bias."
+  ]
+}

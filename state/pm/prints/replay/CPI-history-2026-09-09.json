@@ -1,0 +1,70 @@
+{
+  "print": "CPI",
+  "model": "cpi_gas_core_v1",
+  "n": 60,
+  "first": "2021-07",
+  "last": "2026-07",
+  "mean_abs_error": 0.1561,
+  "naive_last_value_mae": 0.2169,
+  "mean_sigma": 0.1748,
+  "coverage_1sigma": 0.683,
+  "coverage_2sigma": 0.883,
+  "z_mean": -0.03,
+  "z_stdev": 1.235,
+  "pit_histogram_deciles": [
+    9,
+    6,
+    5,
+    7,
+    2,
+    8,
+    6,
+    7,
+    5,
+    5
+  ],
+  "synthetic_ladder_brier": 0.1492,
+  "last_periods": [
+    {
+      "period": "2026-02",
+      "actual": 0.3,
+      "mean": 0.351,
+      "sigma": 0.1812
+    },
+    {
+      "period": "2026-03",
+      "actual": 0.9,
+      "mean": 1.0956,
+      "sigma": 0.1811
+    },
+    {
+      "period": "2026-04",
+      "actual": 0.6,
+      "mean": 0.6442,
+      "sigma": 0.1821
+    },
+    {
+      "period": "2026-05",
+      "actual": 0.5,
+      "mean": 0.5539,
+      "sigma": 0.1821
+    },
+    {
+      "period": "2026-06",
+      "actual": -0.4,
+      "mean": -0.0665,
+      "sigma": 0.181
+    },
+    {
+      "period": "2026-07",
+      "actual": 0.1,
+      "mean": 0.0784,
+      "sigma": 0.1838
+    }
+  ],
+  "caveats": [
+    "Inputs are the current FRED vintage except payrolls, which uses ALFRED vintages as of the release eve. Seasonal factors and revisions flatter the monthly models slightly.",
+    "This measures whether the model's distribution is honest, not whether it beats the market. That needs settled Kalshi ladders (replay-market), of which there are few.",
+    "Coverage should be near 0.68 and 0.95; a z stdev far from 1 means sigma is mis-scaled; a lopsided PIT histogram means bias."
+  ]
+}
