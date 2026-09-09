@@ -69,6 +69,20 @@ until the model has measurably beaten the market it is betting against. Fills
 happen by hand in Robinhood and are recorded as reported. `docs/PREDICTION_MARKETS.md`
 says where an edge could and could not come from; read it first.
 
+The same machinery runs the **economic-print desk**: Kalshi's strike ladders on
+CPI, core CPI, CPI YoY, payrolls, unemployment and weekly claims, priced by
+nowcast models built only from public FRED data.
+
+```
+/print-open               # weekly playbook: which prints, rules, fees, stake
+/print-check              # daily: settle, one frozen ticket per event, a play is a message
+/print-review             # after each release: grade the distribution, the call, the fill
+bin/prints replay CPI     # grade a model on decades of prints before any ticket exists
+```
+
+`docs/ECONOMIC_PRINTS.md` explains the contracts, the models, and what each one
+does not know.
+
 ## Quick start
 
 ```bash
@@ -97,15 +111,17 @@ wrong. Then see `docs/RUNBOOK.md`.
 
 ```
 .claude/agents/     market-brief · flow-analyst · position-monitor
-.claude/skills/     open-desk · desk-monitor · close-desk · pm-open · pm-window · pm-review
+.claude/skills/     open-desk · desk-monitor · close-desk
+                    pm-open · pm-window · pm-review · print-open · print-check · print-review
 schemas/            the artifact contracts — read these first
-examples/           a fully worked watchlist, playbook and ticket, for reference
+examples/           worked watchlist, playbooks and tickets, for reference
 bin/uw              UW REST wrapper; captures raw responses for replay
-bin/pm              prediction-market tool: Kalshi data, pricer, tickets, ledger, replay
+bin/pm              15-minute desk: Kalshi data, pricer, tickets, ledger, replay
+bin/prints          print desk: Kalshi ladders, FRED nowcasts, tickets, ledger, replay
 bin/validate        schema check; agents run it before writing any artifact
-tests/              offline tests for the pricer and the decision rules
-state/              briefs · flow · watchlist · alerts · positions · pm · raw
-docs/               ARCHITECTURE · UW_ENDPOINTS · RUNBOOK · PREDICTION_MARKETS
+tests/              offline tests for the pricers and the decision rules
+state/              briefs · flow · watchlist · alerts · positions · pm · pm/prints · raw · cache
+docs/               ARCHITECTURE · UW_ENDPOINTS · RUNBOOK · PREDICTION_MARKETS · ECONOMIC_PRINTS
 CLAUDE.md           the desk's operating rules and risk envelope
 ```
 

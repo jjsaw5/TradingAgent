@@ -1,0 +1,1313 @@
+#!/usr/bin/env python3
+"""
+prints — the prediction-market desk tool for scheduled economic prints.
+
+Same machinery as bin/pm (frozen playbook, one frozen ticket per decision,
+append-only ledger, calibration gate), pointed at Kalshi's strike ladders on
+CPI, core CPI, CPI year-over-year, nonfarm payrolls, the unemployment rate and
+weekly initial jobless claims. The client trades these on Robinhood; Robinhood
+routes to Kalshi, so the ticker here is the contract there.
+
+The model is a nowcast built only from public FRED series. Every model here is
+deliberately simple enough to be graded: a trend, a regression on gasoline, an
+autoregression on claims. The replay grades each one against decades of prints
+and, where Kalshi has settled ladders, against the market's own price.
+
+Nothing here places an order on any venue and nothing here holds a credential.
+
+Subcommands
+  prints calendar                          upcoming releases, market-implied vs model
+  prints nowcast <PRINT>                   the model's distribution and its inputs
+  prints ladder <EVENT_TICKER>             one event's strike ladder with model p per strike
+  prints ticket <PRINT> [--event T]        frozen decision ticket for the nearest event
+  prints record <ticket_id> --side yes|no --price P --contracts N [--replace]
+  prints settle                            settle released events -> ledger, refresh gate
+  prints calibrate                         calibration and gate from the live ledger
+  prints replay <PRINT> [--periods N]      model-only calibration on FRED history
+  prints replay-market <PRINT>             model vs Kalshi price on settled events (small n)
+  prints playbook init [--prints CPI,CLAIMS] [--max-stake N]
+  prints budget
+
+Flags (before the subcommand): --no-capture, --quiet
+
+PRINT is one of: CPI, CPICORE, CPIYOY, PAYROLLS, U3, CLAIMS
+"""
+
+import importlib.util
+import json
+import math
+import re
+import statistics
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+# bin/pm carries the venue adapter, fee model, edge arithmetic and file helpers.
+# It has no .py suffix, so load it by path rather than duplicating 300 lines.
+_loader = SourceFileLoader("pm", str(ROOT / "bin" / "pm"))
+_spec = importlib.util.spec_from_loader("pm", _loader)
+pm = importlib.util.module_from_spec(_spec)
+_loader.exec_module(pm)
+
+STATE = ROOT / "state" / "pm" / "prints"
+FRED = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+ALFRED = "https://alfred.stlouisfed.org/graph/alfredgraph.csv"
+KALSHI = pm.KALSHI
+
+PRINTS = {
+    "CPI": {
+        "series": "KXCPI", "title": "CPI, month-over-month, headline, seasonally adjusted",
+        "model": "cpi_gas_core_v1", "step": 0.1, "unit": "pct",
+        "fred": {"index": "CPIAUCSL", "core": "CPILFESL", "gas": "GASREGW"},
+        "cadence": "monthly", "release_note": "BLS, usually the second week of the following month, 08:30 ET",
+    },
+    "CPICORE": {
+        "series": "KXCPICORE", "title": "Core CPI, month-over-month, seasonally adjusted",
+        "model": "core_trend_v1", "step": 0.1, "unit": "pct",
+        "fred": {"core": "CPILFESL"}, "cadence": "monthly", "release_note": "BLS, with headline CPI",
+    },
+    "CPIYOY": {
+        "series": "KXCPIYOY", "title": "CPI, year-over-year, headline, not seasonally adjusted",
+        "model": "cpi_yoy_v1", "step": 0.1, "unit": "pct",
+        "fred": {"index": "CPIAUCSL", "index_nsa": "CPIAUCNS", "core": "CPILFESL", "gas": "GASREGW"},
+        "cadence": "monthly", "release_note": "BLS, with headline CPI",
+    },
+    "PAYROLLS": {
+        "series": "KXPAYROLLS", "title": "Nonfarm payrolls, monthly change, first print",
+        "model": "payrolls_trend_v1", "step": 1000, "unit": "jobs",
+        "fred": {"payems": "PAYEMS"}, "cadence": "monthly", "release_note": "BLS, first Friday-ish, 08:30 ET",
+    },
+    "U3": {
+        "series": "KXU3", "title": "Unemployment rate (U-3)",
+        "model": "u3_rw_v1", "step": 0.1, "unit": "pct",
+        "fred": {"unrate": "UNRATE"}, "cadence": "monthly", "release_note": "BLS, with payrolls",
+    },
+    "CLAIMS": {
+        "series": "KXJOBLESSCLAIMS", "title": "Initial jobless claims, weekly, seasonally adjusted",
+        "model": "claims_ar_v1", "step": 1000, "unit": "claims",
+        "fred": {"icsa": "ICSA"}, "cadence": "weekly", "release_note": "DOL, Thursdays 08:30 ET, for the week ending the prior Saturday",
+    },
+}
+
+MODEL_NOTES = {
+    "cpi_gas_core_v1": "MODELED. Headline MoM = trailing-3 core MoM + a + c*(gasoline price MoM), a and c fit by OLS on the trailing 120 months of FRED data; sigma is the residual stdev. Gasoline is the monthly average of weekly retail prices, partial-month when the month is not over. No shelter, food or tariff information beyond what is in the core trend.",
+    "core_trend_v1": "MODELED. Core MoM = mean of the last 3 core MoM prints; sigma is the stdev of that rule's error over the trailing 60 months. A trend and nothing else.",
+    "cpi_yoy_v1": "MODELED. Year-over-year from the headline MoM nowcast applied to the NSA index, with the calendar month's average NSA-minus-SA seasonal difference over the last 5 years; sigma is the headline MoM sigma. Rounded to 0.1 like the BLS release.",
+    "payrolls_trend_v1": "MODELED. Change = mean of the last 3 monthly changes as they stood at the time; sigma is that rule's error stdev over the trailing 60 months excluding 2020. Knows nothing about ADP, claims or strikes. Expect the market to beat it.",
+    "u3_rw_v1": "MODELED. Rate = last month's rate; sigma is the stdev of monthly changes over the trailing 60 months excluding 2020. A random walk on a slow series.",
+    "claims_ar_v1": "MODELED. Claims = w*last week + (1-w)*trailing-4-week mean, w fit on the trailing 156 weeks; sigma is the residual stdev over the trailing 104 weeks. Seasonal adjustment is DOL's, and is revised.",
+}
+
+DEFAULT_PLAYBOOK = {
+    "prints": ["CPI", "CLAIMS"],
+    "fees": dict(pm.DEFAULT_PLAYBOOK["fees"]),
+    "rules": {
+        "min_edge_per_contract": 0.08,
+        "max_model_confidence": 0.90,
+        "max_spread": 0.10,
+        "min_ask_size": 20,
+        "max_horizon_days": 10,
+        "min_hours_to_release": 1,
+    },
+    "capital": {
+        "max_stake_per_event": 50,
+        "max_weekly_loss": 150,
+        "max_open_events": 3,
+        "paper_stake": 10,
+    },
+    "gate": {
+        "min_events_for_minimum": 20,
+        "min_events_for_full": 60,
+        "min_decisions_for_full": 20,
+        "minimum_stake": 10,
+    },
+}
+
+PMError = pm.PMError
+iso, parse_iso, fnum, phi, today = pm.iso, pm.parse_iso, pm.fnum, pm.phi, pm.today
+read_json, write_json, arg_value, die, eprint = pm.read_json, pm.write_json, pm.arg_value, pm.die, pm.eprint
+
+
+# ------------------------------------------------------------------- data
+
+def fetch_text(url: str, slug: str) -> str:
+    # No custom User-Agent: FRED's edge silently drops connections for unfamiliar
+    # or browser-like agents and accepts the stock Python one. Verified 2026-09-09.
+    req = urllib.request.Request(url)
+    pm._count_request()
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=45) as r:
+                body = r.read()
+            break
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 502, 503) and attempt < 2:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise PMError(f"HTTP {e.code} on {url}")
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            if attempt < 2:
+                time.sleep(1)
+                continue
+            raise PMError(f"no response from {url}: {e}")
+    if pm.OPTS["capture"]:
+        day = pm.RAW / today()
+        day.mkdir(parents=True, exist_ok=True)
+        f = day / f"prints_{slug}-{datetime.now(timezone.utc).strftime('%H%M%S')}.csv"
+        f.write_bytes(body)
+        if not pm.OPTS["quiet"]:
+            eprint(f"prints: {url.split('?')[0]} -> {f.relative_to(ROOT)}")
+    return body.decode()
+
+
+_FRED_CACHE = {}
+FRED_DISK = ROOT / "state" / "cache" / "fred"
+FRED_TTL_SECONDS = 6 * 3600
+_last_fred_call = [0.0]
+
+
+def fred(series_id: str, vintage: str = None):
+    """[(date 'YYYY-MM-DD', value)] ascending, missing observations dropped.
+    With a vintage date the series is as it stood on that day (ALFRED).
+
+    FRED serves a full history per call and drops connections under bursts, so
+    each series is cached on disk (gitignored) for six hours; a vintage is
+    immutable and is cached for good. Calls are spaced at least a second apart."""
+    key = (series_id, vintage)
+    if key in _FRED_CACHE:
+        return _FRED_CACHE[key]
+    FRED_DISK.mkdir(parents=True, exist_ok=True)
+    disk = FRED_DISK / (f"{series_id}@{vintage}.csv" if vintage else f"{series_id}.csv")
+    text = None
+    if disk.exists():
+        age = time.time() - disk.stat().st_mtime
+        if vintage or age < FRED_TTL_SECONDS:
+            text = disk.read_text()
+    if text is None:
+        if vintage:
+            url = f"{ALFRED}?id={series_id}&vintage_date={vintage}"
+        else:
+            url = f"{FRED}?id={series_id}"
+        wait = 1.0 - (time.time() - _last_fred_call[0])
+        if wait > 0:
+            time.sleep(wait)
+        text = fetch_text(url, f"fred_{series_id}" + (f"_{vintage}" if vintage else ""))
+        _last_fred_call[0] = time.time()
+        if text.startswith("observation_date") or text.startswith("DATE"):
+            disk.write_text(text)
+    out = []
+    for line in text.splitlines()[1:]:
+        parts = line.strip().split(",")
+        if len(parts) < 2 or parts[1] in (".", ""):
+            continue
+        try:
+            out.append((parts[0], float(parts[1])))
+        except ValueError:
+            continue
+    if not out:
+        raise PMError(f"FRED returned no observations for {series_id}")
+    _FRED_CACHE[key] = out
+    return out
+
+
+def month_key(d: str) -> str:
+    return d[:7]
+
+
+def add_months(ym: str, k: int) -> str:
+    y, m = int(ym[:4]), int(ym[5:7])
+    m += k
+    y += (m - 1) // 12
+    m = (m - 1) % 12 + 1
+    return f"{y:04d}-{m:02d}"
+
+
+def months_between(a: str, b: str) -> int:
+    return (int(b[:4]) - int(a[:4])) * 12 + int(b[5:7]) - int(a[5:7])
+
+
+def pct_changes(series):
+    """[(date, pct change vs prior obs)] for a level series."""
+    return [(d, (v / pv - 1) * 100) for (pd, pv), (d, v) in zip(series, series[1:]) if pv]
+
+
+def ols2(xs, ys):
+    """y = a + c x by least squares; returns a, c, residual stdev."""
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    c = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx if sxx else 0.0
+    a = my - c * mx
+    res = [y - (a + c * x) for x, y in zip(xs, ys)]
+    sd = statistics.stdev(res) if n > 2 else None
+    return a, c, sd
+
+
+# ------------------------------------------------------------------ models
+# Every model returns {"mean", "sigma", "inputs": {...}, "horizon", "gaps": [...]}
+# for a target period, using only observations dated before `asof` (a
+# 'YYYY-MM-DD'), so the same code serves the live ticket and the replay.
+
+def _before(series, asof):
+    return [(d, v) for d, v in series if d < asof]
+
+
+def _hist(series_id, asof, vintage=None, exclude_from=None):
+    """Observations dated before `asof` and, when given, before `exclude_from`.
+
+    The target period's own observation must never feed the model that forecasts
+    it. FRED stamps a month's print on the first of that month, so 'before the
+    release date' is not enough: August CPI is dated 2026-08-01 and is released
+    in September. Every model passes the target period here explicitly, and the
+    replay's U3 walk scoring a perfect zero error is what happens when it does not."""
+    cut = min(asof, exclude_from) if exclude_from else asof
+    return [(d, v) for d, v in fred(series_id, vintage) if d < cut]
+
+
+def model_claims(target_week_end: str, asof: str, vintage=None):
+    h = _hist("ICSA", asof, vintage, exclude_from=target_week_end)
+    vals = [v for _, v in h]
+    if len(vals) < 200:
+        raise PMError("not enough ICSA history")
+    # fit w on the trailing 156 weeks
+    best = None
+    for w10 in range(0, 21):
+        w = w10 / 20
+        errs = []
+        for i in range(len(vals) - 156, len(vals)):
+            pred = w * vals[i - 1] + (1 - w) * sum(vals[i - 4:i]) / 4
+            errs.append(vals[i] - pred)
+        sse = sum(e * e for e in errs)
+        if best is None or sse < best[0]:
+            best = (sse, w)
+    w = best[1]
+    errs = []
+    for i in range(len(vals) - 104, len(vals)):
+        pred = w * vals[i - 1] + (1 - w) * sum(vals[i - 4:i]) / 4
+        errs.append(vals[i] - pred)
+    sigma = statistics.stdev(errs)
+    last_date = h[-1][0]
+    mean = w * vals[-1] + (1 - w) * sum(vals[-4:]) / 4
+    # horizon in weeks between the last observed week and the target week
+    lag = (datetime.strptime(target_week_end, "%Y-%m-%d") - datetime.strptime(last_date, "%Y-%m-%d")).days // 7
+    gaps = []
+    if lag > 1:
+        sigma *= math.sqrt(lag)
+        gaps.append(f"target week is {lag} weeks past the last observation; sigma scaled by sqrt({lag})")
+    if lag < 1:
+        gaps.append("target week already observed in FRED — this print has been released")
+    return {"mean": mean, "sigma": sigma, "horizon": lag,
+            "inputs": {"last_week": last_date, "last": vals[-1], "avg4": sum(vals[-4:]) / 4, "w": w}, "gaps": gaps}
+
+
+def _core_mom(asof, vintage=None, target_month=None):
+    core = _hist("CPILFESL", asof, vintage, exclude_from=target_month + "-01" if target_month else None)
+    return pct_changes(core)
+
+
+def model_core(target_month: str, asof: str, vintage=None):
+    cm = _core_mom(asof, vintage, target_month)
+    vals = [v for _, v in cm]
+    if len(vals) < 80:
+        raise PMError("not enough core CPI history")
+    errs = [vals[i] - sum(vals[i - 3:i]) / 3 for i in range(len(vals) - 60, len(vals))]
+    sigma = statistics.stdev(errs)
+    mean = sum(vals[-3:]) / 3
+    last_month = month_key(cm[-1][0])
+    h = months_between(last_month, target_month)
+    gaps = []
+    if h > 1:
+        sigma *= math.sqrt(h)
+        gaps.append(f"target month is {h} months past the last core print; sigma scaled by sqrt({h})")
+    if h < 1:
+        gaps.append("target month already in FRED — this print has been released")
+    return {"mean": mean, "sigma": sigma, "horizon": h,
+            "inputs": {"last_month": last_month, "core_last3": vals[-3:]}, "gaps": gaps}
+
+
+def _gas_monthly(asof, vintage=None):
+    """{month: (avg price, weeks observed)} from weekly GASREGW before asof."""
+    g = _before(fred("GASREGW", vintage), asof)
+    by = {}
+    for d, v in g:
+        by.setdefault(month_key(d), []).append(v)
+    return {m: (sum(v) / len(v), len(v)) for m, v in by.items()}
+
+
+def model_cpi(target_month: str, asof: str, vintage=None):
+    head = pct_changes(_hist("CPIAUCSL", asof, vintage, exclude_from=target_month + "-01"))
+    core = dict(_core_mom(asof, vintage, target_month))
+    gas = _gas_monthly(asof, vintage)  # weekly, published during the month: known at release
+    core_by = {month_key(d): v for d, v in core.items()}
+    head_by = {month_key(d): v for d, v in head}
+    months = sorted(head_by)
+    # regression sample: trailing 120 months where core trend and gas MoM exist
+    xs, ys = [], []
+    for m in months[-121:]:
+        p1, p2, p3 = add_months(m, -1), add_months(m, -2), add_months(m, -3)
+        if not all(k in core_by for k in (p1, p2, p3)) or m not in gas or add_months(m, -1) not in gas:
+            continue
+        trend = (core_by[p1] + core_by[p2] + core_by[p3]) / 3
+        gmom = (gas[m][0] / gas[add_months(m, -1)][0] - 1) * 100
+        xs.append(gmom)
+        ys.append(head_by[m] - trend)
+    if len(xs) < 60:
+        raise PMError("not enough aligned CPI/gas history")
+    a, c, sd = ols2(xs, ys)
+    last_month = months[-1]
+    h = months_between(last_month, target_month)
+    gaps = []
+    p1, p2, p3 = add_months(target_month, -1), add_months(target_month, -2), add_months(target_month, -3)
+    avail = [core_by[k] for k in (p1, p2, p3) if k in core_by]
+    if len(avail) < 3:
+        # target further out than the core data: use the latest three
+        latest = [core_by[k] for k in sorted(core_by)[-3:]]
+        trend = sum(latest) / 3
+        gaps.append(f"core trend uses the latest 3 prints, not the 3 preceding {target_month}")
+    else:
+        trend = sum(avail) / 3
+    if target_month in gas and add_months(target_month, -1) in gas:
+        gmom = (gas[target_month][0] / gas[add_months(target_month, -1)][0] - 1) * 100
+        weeks = gas[target_month][1]
+        if weeks < 4:
+            gaps.append(f"gasoline for {target_month} is a partial month ({weeks} weekly prints)")
+    else:
+        gmom = 0.0
+        weeks = 0
+        gaps.append(f"no gasoline data for {target_month} yet — gas term set to zero, which is an assumption, not a measurement")
+    sigma = sd
+    if h > 1:
+        sigma = sd * math.sqrt(h)
+        gaps.append(f"target month is {h} months past the last CPI print; sigma scaled by sqrt({h})")
+    if h < 1:
+        gaps.append("target month already in FRED — this print has been released")
+    mean = trend + a + c * gmom
+    return {"mean": mean, "sigma": sigma, "horizon": h,
+            "inputs": {"last_month": last_month, "core_trend": round(trend, 4), "gas_mom_pct": round(gmom, 3),
+                       "gas_weeks": weeks, "ols_a": round(a, 4), "ols_c": round(c, 5), "ols_n": len(xs)},
+            "gaps": gaps}
+
+
+def model_cpi_yoy(target_month: str, asof: str, vintage=None):
+    base = model_cpi(target_month, asof, vintage)
+    nsa = dict((month_key(d), v) for d, v in _hist("CPIAUCNS", asof, vintage, exclude_from=target_month + "-01"))
+    sa = dict((month_key(d), v) for d, v in _hist("CPIAUCSL", asof, vintage, exclude_from=target_month + "-01"))
+    prev, back12 = add_months(target_month, -1), add_months(target_month, -12)
+    gaps = list(base["gaps"])
+    if prev not in nsa or back12 not in nsa:
+        raise PMError(f"NSA index missing for {prev} or {back12}")
+    # seasonal difference for this calendar month: mean over 5 prior years of (NSA MoM - SA MoM)
+    diffs = []
+    for k in range(1, 6):
+        m = add_months(target_month, -12 * k)
+        pm_ = add_months(m, -1)
+        if m in nsa and pm_ in nsa and m in sa and pm_ in sa:
+            diffs.append((nsa[m] / nsa[pm_] - 1) * 100 - (sa[m] / sa[pm_] - 1) * 100)
+    seas = sum(diffs) / len(diffs) if diffs else 0.0
+    if not diffs:
+        gaps.append("no seasonal history for this month; NSA assumed equal to SA")
+    nsa_mom = base["mean"] + seas
+    yoy = (nsa[prev] * (1 + nsa_mom / 100) / nsa[back12] - 1) * 100
+    # d(yoy)/d(mom) ~ nsa[prev]/nsa[back12] ~ 1.03, so sigma carries over almost unchanged
+    sigma = base["sigma"] * nsa[prev] / nsa[back12]
+    inputs = dict(base["inputs"])
+    inputs.update({"seasonal_diff_pct": round(seas, 4), "nsa_prev": nsa[prev], "nsa_back12": nsa[back12]})
+    return {"mean": yoy, "sigma": sigma, "horizon": base["horizon"], "inputs": inputs, "gaps": gaps}
+
+
+def model_payrolls(target_month: str, asof: str, vintage=None):
+    p = _hist("PAYEMS", asof, vintage, exclude_from=target_month + "-01")
+    ch = [(d, v - pv) for (pd, pv), (d, v) in zip(p, p[1:])]
+    vals = [v for _, v in ch]
+    if len(vals) < 80:
+        raise PMError("not enough PAYEMS history")
+    errs = []
+    for i in range(len(vals) - 60, len(vals)):
+        if any(abs(x) > 1500 for x in vals[i - 3:i + 1]):
+            continue  # 2020 does not belong in a sigma for normal months
+        errs.append(vals[i] - sum(vals[i - 3:i]) / 3)
+    if len(errs) < 30:
+        raise PMError("too few usable months for payrolls sigma")
+    sigma = statistics.stdev(errs) * 1000  # PAYEMS is in thousands; strikes are in jobs
+    mean = sum(vals[-3:]) / 3 * 1000
+    last_month = month_key(ch[-1][0])
+    h = months_between(last_month, target_month)
+    gaps = []
+    if h > 1:
+        sigma *= math.sqrt(h)
+        gaps.append(f"target month is {h} months past the last payrolls print; sigma scaled by sqrt({h})")
+    if h < 1:
+        gaps.append("target month already in FRED — this print has been released")
+    return {"mean": mean, "sigma": sigma, "horizon": h,
+            "inputs": {"last_month": last_month, "last3_changes_k": vals[-3:]}, "gaps": gaps}
+
+
+def model_u3(target_month: str, asof: str, vintage=None):
+    u = _hist("UNRATE", asof, vintage, exclude_from=target_month + "-01")
+    vals = [v for _, v in u]
+    ch = [b - a for a, b in zip(vals, vals[1:])]
+    errs = [c for c in ch[-60:] if abs(c) < 1.0]
+    if len(errs) < 30:
+        raise PMError("too few usable months for U3 sigma")
+    sigma = statistics.stdev(errs)
+    last_month = month_key(u[-1][0])
+    h = months_between(last_month, target_month)
+    gaps = []
+    if h > 1:
+        sigma *= math.sqrt(h)
+        gaps.append(f"target month is {h} months past the last U3 print; sigma scaled by sqrt({h})")
+    if h < 1:
+        gaps.append("target month already in FRED — this print has been released")
+    return {"mean": vals[-1], "sigma": sigma, "horizon": h,
+            "inputs": {"last_month": last_month, "last": vals[-1]}, "gaps": gaps}
+
+
+MODELS = {
+    "CPI": model_cpi, "CPICORE": model_core, "CPIYOY": model_cpi_yoy,
+    "PAYROLLS": model_payrolls, "U3": model_u3, "CLAIMS": model_claims,
+}
+
+
+def strike_p(mean, sigma, strike, rule, step):
+    """P(yes) for one strike under N(mean, sigma), honouring the print's rounding.
+    'greater'          : printed > k  <=> printed >= k+step  <=> X >= k + step/2
+    'greater_or_equal' : printed >= k                        <=> X >= k - step/2"""
+    if sigma is None or sigma <= 0:
+        return None
+    edge = strike + step / 2 if rule == "greater" else strike - step / 2
+    return 1 - phi((edge - mean) / sigma)
+
+
+# ----------------------------------------------------------------- events
+
+MONTHS = {m: i + 1 for i, m in enumerate(["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"])}
+
+
+def target_period(print_id: str, event_ticker: str):
+    """The period a Kalshi event resolves on, from its ticker.
+    KXCPI-26AUG -> '2026-08'; KXJOBLESSCLAIMS-26SEP10 -> week ending '2026-09-05'."""
+    m = re.search(r"-(\d\d)([A-Z]{3})(\d\d)?$", event_ticker)
+    if not m:
+        raise PMError(f"cannot parse period from {event_ticker}")
+    yy, mon, dd = int(m.group(1)), MONTHS[m.group(2)], m.group(3)
+    if print_id == "CLAIMS":
+        if not dd:
+            raise PMError(f"claims event without a day: {event_ticker}")
+        release = datetime(2000 + yy, mon, int(dd))
+        # released Thursday for the week ending the previous Saturday
+        return (release - timedelta(days=5)).strftime("%Y-%m-%d")
+    return f"{2000 + yy:04d}-{mon:02d}"
+
+
+def open_events(print_id: str, limit: int = 6):
+    series = PRINTS[print_id]["series"]
+    data = pm.http_get(KALSHI, "/events", {"series_ticker": series, "status": "open", "limit": limit, "with_nested_markets": "true"},
+                       slug=f"kalshi_events_{series}")
+    evs = []
+    for e in data.get("events", []):
+        ms = [m for m in e.get("markets", []) if fnum(m.get("floor_strike")) is not None]
+        if not ms:
+            continue
+        close = min(parse_iso(m["close_time"]) for m in ms)
+        evs.append({"event_ticker": e["event_ticker"], "title": e.get("title"), "close_unix": close,
+                    "close": iso(close), "markets": ms, "rule": ms[0].get("strike_type")})
+    evs.sort(key=lambda e: e["close_unix"])
+    return evs
+
+
+def event_by_ticker(print_id: str, event_ticker: str):
+    for e in open_events(print_id, limit=12):
+        if e["event_ticker"] == event_ticker:
+            return e
+    data = pm.http_get(KALSHI, f"/events/{event_ticker}", {"with_nested_markets": "true"}, slug=f"kalshi_event_{event_ticker}")
+    e = data.get("event") or {}
+    ms = [m for m in e.get("markets", []) if fnum(m.get("floor_strike")) is not None]
+    if not ms:
+        raise PMError(f"no ladder for {event_ticker}")
+    close = min(parse_iso(m["close_time"]) for m in ms)
+    return {"event_ticker": event_ticker, "title": e.get("title"), "close_unix": close, "close": iso(close),
+            "markets": ms, "rule": ms[0].get("strike_type")}
+
+
+def ladder_rows(print_id, event, dist, fees):
+    """One row per strike: model p, market quote, edge on each side."""
+    step = PRINTS[print_id]["step"]
+    rows = []
+    for m in sorted(event["markets"], key=lambda m: fnum(m["floor_strike"])):
+        k = fnum(m["floor_strike"])
+        q = pm.kalshi_quote(m, {})
+        p = strike_p(dist["mean"], dist["sigma"], k, m.get("strike_type"), step) if dist else None
+        rows.append({
+            "ticker": m["ticker"], "strike": k, "rule": m.get("strike_type"),
+            "p_model": round(p, 4) if p is not None else None,
+            "yes_bid": q["yes_bid"], "yes_ask": q["yes_ask"], "no_bid": q["no_bid"], "no_ask": q["no_ask"],
+            "mid": q["mid_up"], "volume": q["volume"], "open_interest": q["open_interest"],
+            "spread": round(q["yes_ask"] - q["yes_bid"], 4) if q["yes_ask"] is not None and q["yes_bid"] is not None else None,
+            "edge_yes": pm.edge_for(p, q["yes_ask"], fees),
+            "edge_no": pm.edge_for((1 - p) if p is not None else None, q["no_ask"], fees),
+        })
+    return rows
+
+
+def implied_median(rows):
+    """The strike where the market's mid crosses 0.5, by linear interpolation. Null when
+    the ladder does not bracket 0.5 or has no mids."""
+    pts = [(r["strike"], r["mid"]) for r in rows if r["mid"] is not None]
+    for (k0, m0), (k1, m1) in zip(pts, pts[1:]):
+        if m0 >= 0.5 >= m1 and m0 != m1:
+            return round(k0 + (m0 - 0.5) / (m0 - m1) * (k1 - k0), 4)
+    return None
+
+
+# ---------------------------------------------------------------- playbook
+
+def playbook_dir():
+    return STATE / "playbook"
+
+
+def load_playbook():
+    """The most recent playbook still valid today, or defaults with ref None."""
+    d = playbook_dir()
+    ref, pb = None, None
+    if d.exists():
+        for p in sorted(d.glob("*.json"), reverse=True):
+            doc = read_json(p)
+            if doc.get("valid_until", "") >= today():
+                pb, ref = doc, str(p.relative_to(ROOT))
+                break
+    merged = json.loads(json.dumps(DEFAULT_PLAYBOOK))
+    if pb:
+        for k in ("fees", "rules", "capital", "gate"):
+            merged[k].update(pb.get(k, {}))
+        merged["prints"] = pb.get("prints", merged["prints"])
+    return merged, ref
+
+
+def ledger_path():
+    return STATE / "ledger.jsonl"
+
+
+def read_ledger():
+    p = ledger_path()
+    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+
+
+def tickets_dir():
+    return STATE / "tickets"
+
+
+def all_tickets():
+    d = tickets_dir()
+    return [read_json(p) for p in sorted(d.glob("*.json"))] if d.exists() else []
+
+
+def gate_stage():
+    p = STATE / "calibration.json"
+    return read_json(p).get("gate", {}).get("stage", "paper") if p.exists() else "paper"
+
+
+def open_exposure():
+    open_stake, open_events_ = 0.0, set()
+    for t in all_tickets():
+        if t.get("execution") and not t.get("outcome"):
+            open_stake += t["execution"].get("stake", 0) or 0
+            open_events_.add(t["event_ticker"])
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+    realized = sum(e["pnl_real"] for e in read_ledger() if e.get("pnl_real") is not None and e.get("settled_at", "") >= week_ago)
+    return open_stake, len(open_events_), realized
+
+
+# ------------------------------------------------------------------ ticket
+
+def decide(playbook, ref, rows, event, dist, now):
+    rules, cap = playbook["rules"], playbook["capital"]
+    stage = gate_stage()
+    base = {"status": None, "market_ticker": None, "side": None, "strike": None, "limit_price": None, "contracts": None,
+            "stake": None, "max_loss": None, "ev_per_contract": None, "p_model_side": None, "gate": stage, "reason": None}
+
+    def out(status, reason, **kw):
+        d = dict(base)
+        d.update(status=status, reason=reason, **kw)
+        return d
+
+    hours = (event["close_unix"] - now) / 3600
+    if hours < rules["min_hours_to_release"]:
+        return out("too_late", f"{hours:.1f}h to close < {rules['min_hours_to_release']}h minimum")
+    if hours > rules["max_horizon_days"] * 24:
+        return out("too_far", f"release is {hours/24:.1f} days out, beyond max_horizon_days {rules['max_horizon_days']} — the model's sigma does not cover that horizon honestly")
+    if dist is None:
+        return out("no_model", "could not evaluate: model inputs missing — a gap, not a pass")
+    quoted = [r for r in rows if r["yes_ask"] is not None and r["no_ask"] is not None]
+    if not quoted:
+        return out("no_quote", "could not evaluate: no two-sided quotes on the ladder — a gap, not a pass")
+
+    cands = []
+    for r in quoted:
+        if r["spread"] is not None and r["spread"] > rules["max_spread"]:
+            continue
+        for side, p_side, e in (("yes", r["p_model"], r["edge_yes"]), ("no", 1 - r["p_model"], r["edge_no"])):
+            if e["ev_per_contract"] is None:
+                continue
+            cands.append((e["ev_per_contract"], side, p_side, r, e))
+    if not cands:
+        return out("pass", f"no strike inside max_spread {rules['max_spread']}")
+    cands.sort(key=lambda c: -c[0])
+    ev, side, p_side, r, e = cands[0]
+    if ev < rules["min_edge_per_contract"]:
+        return out("pass", f"best edge {ev:.3f} ({side} {r['ticker']}) < {rules['min_edge_per_contract']} minimum after fees",
+                   market_ticker=r["ticker"], side=side, strike=r["strike"], ev_per_contract=ev, p_model_side=round(p_side, 4))
+    if p_side > rules["max_model_confidence"]:
+        return out("pass", f"model p({side}) {p_side:.3f} above {rules['max_model_confidence']} — tail edge is model error, not opportunity",
+                   market_ticker=r["ticker"], side=side, strike=r["strike"], ev_per_contract=ev, p_model_side=round(p_side, 4))
+
+    cost = e["cost"]
+    if ref is None:
+        stake, status, note = cap["paper_stake"], "paper", "no playbook in force — paper only (run /print-open)"
+    elif stage == "paper":
+        stake, status, note = cap["paper_stake"], "paper", "calibration gate is 'paper' — logged, not sized"
+    elif stage == "minimum":
+        stake, status, note = min(playbook["gate"]["minimum_stake"], cap["max_stake_per_event"]), "play", "gate 'minimum'"
+    else:
+        stake, status, note = cap["max_stake_per_event"], "play", "gate 'full'"
+
+    if status == "play":
+        open_stake, n_open, realized = open_exposure()
+        if n_open >= cap["max_open_events"]:
+            return out("at_capacity", f"{n_open} open events at max_open_events {cap['max_open_events']}",
+                       market_ticker=r["ticker"], side=side, strike=r["strike"], ev_per_contract=ev)
+        if -realized + open_stake + stake > cap["max_weekly_loss"]:
+            return out("halted", f"weekly loss limit: realized {realized:.2f}, open {open_stake:.2f}, this {stake} > {cap['max_weekly_loss']}",
+                       market_ticker=r["ticker"], side=side, strike=r["strike"], ev_per_contract=ev)
+
+    contracts = int(stake // cost) if cost and cost > 0 else 0
+    if contracts < 1:
+        return out("pass", f"stake {stake} buys fewer than one contract at cost {cost}", market_ticker=r["ticker"], side=side, ev_per_contract=ev)
+    ask_size = None  # sizes come from the book, fetched only for the chosen strike
+    try:
+        book = pm.kalshi_orderbook(r["ticker"])
+        q = pm.kalshi_quote({}, book)
+        ask_size = q["yes_ask_size"] if side == "yes" else q["no_ask_size"]
+        live_ask = q["yes_ask"] if side == "yes" else q["no_ask"]
+        if live_ask is not None and live_ask != e["ask"]:
+            note += f"; book moved: ask now {live_ask} vs {e['ask']} at evaluation"
+    except PMError:
+        note += "; order book unavailable, size unknown"
+    if ask_size is not None and ask_size < rules["min_ask_size"]:
+        note += f"; only {ask_size} at the ask (min {rules['min_ask_size']}) — expect partial or pay up"
+    if ask_size is not None and contracts > ask_size:
+        contracts = int(ask_size)
+        note += f"; cut to {contracts}, the displayed size"
+    if contracts < 1:
+        return out("pass", "nothing displayed at the ask", market_ticker=r["ticker"], side=side, ev_per_contract=ev)
+    return out(status, note, market_ticker=r["ticker"], side=side, strike=r["strike"], limit_price=e["ask"],
+               contracts=contracts, stake=round(contracts * cost, 2), max_loss=round(contracts * cost, 2),
+               ev_per_contract=ev, p_model_side=round(p_side, 4))
+
+
+def build_ticket(print_id: str, event, playbook, ref, now=None):
+    now = now or pm.now_unix()
+    cfg = PRINTS[print_id]
+    period = target_period(print_id, event["event_ticker"])
+    asof = today()
+    gaps = []
+    dist = None
+    try:
+        dist = MODELS[print_id](period, asof)
+        gaps.extend(dist["gaps"])
+    except PMError as e:
+        gaps.append(f"model failed: {e}")
+    rows = ladder_rows(print_id, event, dist, playbook["fees"])
+    if not any(r["yes_ask"] is not None for r in rows):
+        gaps.append("no asks on the ladder")
+    decision = decide(playbook, ref, rows, event, dist, now)
+    ticket_id = f"{print_id}-{event['event_ticker']}-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
+    return {
+        "schema_version": "1.0",
+        "ticket_id": ticket_id,
+        "print": print_id,
+        "print_title": cfg["title"],
+        "venue": "robinhood",
+        "exchange": "kalshi",
+        "event_ticker": event["event_ticker"],
+        "event_title": event.get("title"),
+        "target_period": period,
+        "release_close": event["close"],
+        "hours_to_close": round((event["close_unix"] - now) / 3600, 2),
+        "decided_at": iso(now),
+        "playbook_ref": ref,
+        "model": {
+            "name": cfg["model"],
+            "mean": round(dist["mean"], 5) if dist else None,
+            "sigma": round(dist["sigma"], 5) if dist else None,
+            "horizon": dist["horizon"] if dist else None,
+            "inputs": dist["inputs"] if dist else None,
+            "unit": cfg["unit"],
+            "note": MODEL_NOTES[cfg["model"]],
+        },
+        "market_implied_median": implied_median(rows),
+        "ladder": rows,
+        "fees": playbook["fees"],
+        "decision": decision,
+        "gaps": gaps,
+        "execution": None,
+        "outcome": None,
+    }
+
+
+# ------------------------------------------------------------------ settle
+
+def ladder_brier(rows, printed, step):
+    """Mean squared error across the ladder for the model and for the market mid.
+    The realized indicator per strike follows the print's rounding rule."""
+    bm, bk, n = 0.0, 0.0, 0
+    for r in rows:
+        if r["p_model"] is None:
+            continue
+        thresh = r["strike"] + step / 2 if r["rule"] == "greater" else r["strike"] - step / 2
+        y = 1.0 if printed >= thresh else 0.0
+        bm += (r["p_model"] - y) ** 2
+        if r["mid"] is not None:
+            bk += (r["mid"] - y) ** 2
+        n += 1
+    nk = sum(1 for r in rows if r["p_model"] is not None and r["mid"] is not None)
+    return (round(bm / n, 4) if n else None, round(bk / nk, 4) if nk else None)
+
+
+def settle_ticket(t):
+    tick = t["decision"].get("market_ticker") or t["ladder"][0]["ticker"]
+    m = pm.kalshi_market(tick)
+    result = (m.get("result") or "").lower()
+    if result not in ("yes", "no"):
+        return None
+    printed = fnum(m.get("expiration_value"))
+    step = PRINTS[t["print"]]["step"]
+    d = t["decision"]
+    fees = t["fees"]
+    def result_for(ticker):
+        r = next((r for r in t["ladder"] if r["ticker"] == ticker), None)
+        if r is None or printed is None:
+            return None
+        thresh = r["strike"] + step / 2 if r["rule"] == "greater" else r["strike"] - step / 2
+        return "yes" if printed >= thresh else "no"
+
+    chosen_y = result_for(d.get("market_ticker"))
+    paper_pc = None
+    if d.get("status") in ("play", "paper") and d.get("limit_price") is not None and chosen_y:
+        paper_pc = _pnl(d["side"], d["limit_price"], pm.fee_per_contract(fees, d["limit_price"]), chosen_y)
+    real = None
+    ex = t.get("execution")
+    if ex:
+        # the client's fill settles on the strike they actually traded, which may differ from the desk's
+        ex_y = result_for(ex.get("market_ticker") or d.get("market_ticker"))
+        if ex_y:
+            pc = _pnl(ex["side"], ex["price"], pm.fee_per_contract(fees, ex["price"]), ex_y)
+            real = round(pc * ex["contracts"], 2)
+    bm, bk = ladder_brier(t["ladder"], printed, step) if printed is not None else (None, None)
+    z = None
+    if printed is not None and t["model"]["sigma"]:
+        z = round((printed - t["model"]["mean"]) / t["model"]["sigma"], 3)
+    outcome = {"printed": printed, "chosen_result": chosen_y, "kalshi_result": result, "settled_at": iso(pm.now_unix())}
+    entry = {
+        "schema_version": "1.0",
+        "ticket_id": t["ticket_id"], "ticket_ref": str((tickets_dir() / f"{t['ticket_id']}.json").relative_to(ROOT)),
+        "print": t["print"], "event_ticker": t["event_ticker"], "target_period": t["target_period"],
+        "decided_at": t["decided_at"], "hours_to_close": t["hours_to_close"],
+        "model_mean": t["model"]["mean"], "model_sigma": t["model"]["sigma"], "z": z,
+        "market_implied_median": t["market_implied_median"],
+        "decision": {k: d.get(k) for k in ("status", "market_ticker", "side", "strike", "limit_price", "contracts", "stake", "ev_per_contract", "p_model_side", "gate")},
+        "execution": {k: ex.get(k) for k in ("side", "price", "contracts", "stake", "at")} if ex else None,
+        "outcome": outcome,
+        "pnl_paper_per_contract": paper_pc,
+        "pnl_paper": round(paper_pc * d["contracts"], 2) if paper_pc is not None and d.get("contracts") else None,
+        "pnl_real": real,
+        "brier_ladder_model": bm, "brier_ladder_market": bk,
+        "settled_at": outcome["settled_at"],
+    }
+    return outcome, entry
+
+
+def _pnl(side, price, fee, result):
+    win = (side == result)
+    return round((1 - price - fee) if win else -(price + fee), 4)
+
+
+def compute_calibration(entries, playbook):
+    settled = [e for e in entries if e.get("outcome") and e.get("brier_ladder_model") is not None]
+    # one sample per event: the last ticket before release
+    by_event = {}
+    for e in settled:
+        cur = by_event.get(e["event_ticker"])
+        if cur is None or e["decided_at"] > cur["decided_at"]:
+            by_event[e["event_ticker"]] = e
+    ev = list(by_event.values())
+    both = [e for e in ev if e.get("brier_ladder_market") is not None]
+    bm = round(sum(e["brier_ladder_model"] for e in both) / len(both), 4) if both else None
+    bk = round(sum(e["brier_ladder_market"] for e in both) / len(both), 4) if both else None
+    zs = [e["z"] for e in ev if e.get("z") is not None]
+    cover1 = round(sum(1 for z in zs if abs(z) <= 1) / len(zs), 3) if zs else None
+    cover2 = round(sum(1 for z in zs if abs(z) <= 2) / len(zs), 3) if zs else None
+    decisions = [e for e in settled if e["decision"]["status"] in ("play", "paper") and e.get("pnl_paper_per_contract") is not None]
+    pnls = [e["pnl_paper_per_contract"] for e in decisions]
+    real = [e for e in settled if e.get("pnl_real") is not None]
+    g = playbook["gate"]
+    n = len(ev)
+    beats = bm is not None and bk is not None and bm < bk
+    if n < g["min_events_for_minimum"]:
+        gate, why = "paper", f"{n} settled events; need {g['min_events_for_minimum']} before any real size"
+    elif not beats:
+        gate, why = "paper", f"ladder Brier model {bm} not better than market {bk} — no measured edge"
+    elif n < g["min_events_for_full"] or len(decisions) < g["min_decisions_for_full"] or (pnls and sum(pnls) <= 0):
+        gate, why = "minimum", f"model beats market on {len(both)} events; {len(decisions)} decisions, mean paper P/L {round(sum(pnls)/len(pnls),4) if pnls else None}/contract — minimum stake"
+    else:
+        gate, why = "full", f"model beats market over {len(both)} events and {len(decisions)} decisions are net positive on paper"
+    return {
+        "schema_version": "1.0", "computed_at": iso(pm.now_unix()),
+        "n_settled_tickets": len(settled), "n_settled_events": n, "n_events_with_market": len(both),
+        "brier_ladder_model": bm, "brier_ladder_market": bk,
+        "coverage_1sigma": cover1, "coverage_2sigma": cover2, "n_z": len(zs),
+        "decisions": {"n": len(decisions), "hit_rate": round(sum(1 for x in pnls if x > 0) / len(pnls), 3) if pnls else None,
+                      "mean_pnl_per_contract": round(sum(pnls) / len(pnls), 4) if pnls else None,
+                      "total_pnl_per_contract": round(sum(pnls), 4) if pnls else None},
+        "real": {"n": len(real), "total_pnl": round(sum(e["pnl_real"] for e in real), 2) if real else None},
+        "gate": {"stage": gate, "reason": why},
+        "note": "Ladder Brier averages the squared error over every strike of an event, for the model and for the market mid at decision time. Coverage is the share of prints inside the model's 1 and 2 sigma bands (0.68 and 0.95 if the sigmas are honest). One sample per event: the last ticket before release.",
+    }
+
+
+# ------------------------------------------------------------------ replay
+
+def replay_history(print_id: str, periods: int, playbook):
+    """Model-only calibration on FRED history: walk backwards, forecast each period
+    from data before it, compare with the print. For payrolls the inputs are taken
+    as of the eve of each release (ALFRED vintages); everything else uses the
+    current vintage, which flatters nothing much except the seasonal factors."""
+    cfg = PRINTS[print_id]
+    step = cfg["step"]
+    rows = []
+    if print_id == "CLAIMS":
+        h = fred("ICSA")
+        targets = h[-periods:]
+        for d, actual in targets:
+            asof = (datetime.strptime(d, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+            try:
+                dist = model_claims(d, asof)
+            except PMError:
+                continue
+            rows.append((d, actual, dist))
+    else:
+        sid = {"CPI": "CPIAUCSL", "CPICORE": "CPILFESL", "CPIYOY": "CPIAUCNS", "PAYROLLS": "PAYEMS", "U3": "UNRATE"}[print_id]
+        s = fred(sid)
+        if print_id in ("CPI", "CPICORE"):
+            obs = [(month_key(d), round(v, 1)) for d, v in pct_changes(s)]
+        elif print_id == "CPIYOY":
+            obs = [(month_key(d), round((v / pv - 1) * 100, 1)) for (pd, pv), (d, v) in zip(s, s[12:])]
+        elif print_id == "PAYROLLS":
+            obs = [(month_key(d), (v - pv) * 1000) for (pd, pv), (d, v) in zip(s, s[1:])]
+        else:
+            obs = [(month_key(d), v) for d, v in s]
+        for ym, actual in obs[-periods:]:
+            # data before the target month's release: everything dated before the month after it
+            asof = add_months(ym, 1) + "-01"
+            vintage = None
+            if print_id == "PAYROLLS":
+                vintage = (datetime.strptime(add_months(ym, 1) + "-01", "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+            try:
+                dist = MODELS[print_id](ym, asof, vintage)
+            except PMError as e:
+                eprint(f"prints: skip {ym}: {e}")
+                continue
+            rows.append((ym, actual, dist))
+            time.sleep(0.1 if vintage else 0)
+
+    if not rows:
+        raise PMError("no periods evaluated")
+    zs = [(a - d["mean"]) / d["sigma"] for _, a, d in rows if d["sigma"]]
+    abs_err = [abs(a - d["mean"]) for _, a, d in rows]
+    # naive baseline: last value (levels) or last change (changes)
+    naive = []
+    for i in range(1, len(rows)):
+        naive.append(abs(rows[i][1] - rows[i - 1][1]))
+    # Brier on a synthetic ladder of 7 strikes centred on the model mean, at the print's step
+    briers = []
+    rule = "greater_or_equal" if print_id == "CLAIMS" else "greater"
+    for _, a, d in rows:
+        centre = round(d["mean"] / step) * step
+        for j in range(-3, 4):
+            k = centre + j * step
+            p = strike_p(d["mean"], d["sigma"], k, rule, step)
+            thresh = k + step / 2 if rule == "greater" else k - step / 2
+            y = 1.0 if a >= thresh else 0.0
+            briers.append((p - y) ** 2)
+    pit = [0] * 10
+    for z in zs:
+        b = min(9, max(0, int(phi(z) * 10)))
+        pit[b] += 1
+    return {
+        "print": print_id, "model": cfg["model"], "n": len(rows),
+        "first": rows[0][0], "last": rows[-1][0],
+        "mean_abs_error": round(sum(abs_err) / len(abs_err), 4),
+        "naive_last_value_mae": round(sum(naive) / len(naive), 4) if naive else None,
+        "mean_sigma": round(sum(d["sigma"] for _, _, d in rows) / len(rows), 4),
+        "coverage_1sigma": round(sum(1 for z in zs if abs(z) <= 1) / len(zs), 3),
+        "coverage_2sigma": round(sum(1 for z in zs if abs(z) <= 2) / len(zs), 3),
+        "z_mean": round(sum(zs) / len(zs), 3), "z_stdev": round(statistics.stdev(zs), 3) if len(zs) > 2 else None,
+        "pit_histogram_deciles": pit,
+        "synthetic_ladder_brier": round(sum(briers) / len(briers), 4),
+        "last_periods": [{"period": p, "actual": a, "mean": round(d["mean"], 4), "sigma": round(d["sigma"], 4)} for p, a, d in rows[-6:]],
+        "caveats": [
+            "Inputs are the current FRED vintage except payrolls, which uses ALFRED vintages as of the release eve. Seasonal factors and revisions flatter the monthly models slightly.",
+            "This measures whether the model's distribution is honest, not whether it beats the market. That needs settled Kalshi ladders (replay-market), of which there are few.",
+            "Coverage should be near 0.68 and 0.95; a z stdev far from 1 means sigma is mis-scaled; a lopsided PIT histogram means bias.",
+        ],
+    }
+
+
+def replay_market(print_id: str, playbook):
+    """Model vs the Kalshi ladder on settled events. Uses the daily candle close on
+    the eve of release for the market, and model inputs as of that date."""
+    cfg = PRINTS[print_id]
+    series, step = cfg["series"], cfg["step"]
+    fees, rules = playbook["fees"], playbook["rules"]
+    settled = pm.kalshi_settled(series, 400)
+    by_event = {}
+    for m in settled:
+        if m.get("result") in ("yes", "no") and fnum(m.get("floor_strike")) is not None:
+            by_event.setdefault(m["event_ticker"], []).append(m)
+    out_events, skipped = [], 0
+    for ev, ms in sorted(by_event.items()):
+        close = parse_iso(ms[0]["close_time"])
+        eve = close - 86400
+        asof = iso(eve)[:10]
+        try:
+            period = target_period(print_id, ev)
+            vintage = asof if print_id == "PAYROLLS" else None
+            dist = MODELS[print_id](period, asof, vintage)
+        except PMError as e:
+            eprint(f"prints: skip {ev}: {e}")
+            skipped += 1
+            continue
+        printed = fnum(ms[0].get("expiration_value"))
+        rows = []
+        for m in sorted(ms, key=lambda m: fnum(m["floor_strike"])):
+            try:
+                cs = pm.kalshi_candles(series, m["ticker"], eve - 3 * 86400, close, period_interval=60)
+            except PMError:
+                cs = []
+            cs = [c for c in cs if int(c["end_period_ts"]) <= close]
+            # hourly candles; the quote is the last bar that closed on or before the eve cutoff
+            last = None
+            for c in cs:
+                if int(c["end_period_ts"]) <= eve:
+                    last = c
+            if last is None and cs:
+                last = cs[0]
+            ya = fnum(((last or {}).get("yes_ask") or {}).get("close_dollars"))
+            yb = fnum(((last or {}).get("yes_bid") or {}).get("close_dollars"))
+            k = fnum(m["floor_strike"])
+            p = strike_p(dist["mean"], dist["sigma"], k, m.get("strike_type"), step)
+            rows.append({"ticker": m["ticker"], "strike": k, "rule": m.get("strike_type"), "p_model": p,
+                         "yes_ask": ya if ya and 0 < ya < 1 else None, "yes_bid": yb if yb and 0 < yb < 1 else None,
+                         "mid": (ya + yb) / 2 if ya and yb and 0 < ya < 1 and 0 < yb < 1 else None})
+            time.sleep(0.12)
+        bm, bk = ladder_brier(rows, printed, step)
+        # hypothetical decision at playbook rules
+        best = None
+        for r in rows:
+            if r["yes_ask"] is None or r["yes_bid"] is None:
+                continue
+            na = round(1 - r["yes_bid"], 4)
+            for side, p_side, ask in (("yes", r["p_model"], r["yes_ask"]), ("no", 1 - r["p_model"], na)):
+                e = pm.edge_for(p_side, ask, fees)
+                if e["ev_per_contract"] is not None and (best is None or e["ev_per_contract"] > best[0]):
+                    best = (e["ev_per_contract"], side, p_side, r, e)
+        trade = None
+        if best and best[0] >= rules["min_edge_per_contract"] and best[2] <= rules["max_model_confidence"]:
+            ev_, side, p_side, r, e = best
+            thresh = r["strike"] + step / 2 if r["rule"] == "greater" else r["strike"] - step / 2
+            res = "yes" if printed >= thresh else "no"
+            trade = {"ticker": r["ticker"], "side": side, "ask": e["ask"], "ev": round(ev_, 4), "pnl": _pnl(side, e["ask"], e["fee"], res)}
+        out_events.append({"event": ev, "period": period, "printed": printed, "model_mean": round(dist["mean"], 4),
+                           "model_sigma": round(dist["sigma"], 4), "z": round((printed - dist["mean"]) / dist["sigma"], 3) if printed is not None else None,
+                           "brier_model": bm, "brier_market": bk, "n_quoted": sum(1 for r in rows if r["mid"] is not None), "trade": trade})
+    both = [e for e in out_events if e["brier_market"] is not None and e["brier_model"] is not None]
+    trades = [e["trade"] for e in out_events if e["trade"]]
+    return {
+        "print": print_id, "model": cfg["model"], "n_events": len(out_events), "skipped": skipped,
+        "brier_model": round(sum(e["brier_model"] for e in both) / len(both), 4) if both else None,
+        "brier_market": round(sum(e["brier_market"] for e in both) / len(both), 4) if both else None,
+        "model_beats_market": bool(both) and sum(e["brier_model"] for e in both) < sum(e["brier_market"] for e in both),
+        "trades": len(trades), "trade_pnl_total": round(sum(t["pnl"] for t in trades), 4) if trades else None,
+        "events": out_events,
+        "caveats": [
+            "Very few settled events exist on Kalshi per series (weeks of claims, a couple of months of the rest). This is a sanity check, not a track record.",
+            "Market quote is the last Kalshi minute-candle close on the eve of release; fills at that ask are the best case.",
+            "Model inputs as of the eve of release (ALFRED vintages for payrolls, current vintage otherwise).",
+        ],
+    }
+
+
+# -------------------------------------------------------------- commands
+
+def cmd_calendar(args):
+    playbook, _ = load_playbook()
+    ids = [p.upper() for p in (arg_value(args, "--prints") or ",".join(PRINTS)).split(",")]
+    now = pm.now_unix()
+    print(f"{'print':<9}{'event':<28}{'release close (UTC)':<22}{'days':>5}{'mkt median':>12}{'model mean':>12}{'sigma':>10}")
+    for pid in ids:
+        try:
+            evs = open_events(pid, limit=4)
+        except PMError as e:
+            print(f"{pid:<9}{'-':<28}{'unavailable: ' + str(e)[:40]}")
+            continue
+        for ev in evs[:3]:
+            dist = None
+            try:
+                dist = MODELS[pid](target_period(pid, ev["event_ticker"]), today())
+            except PMError:
+                pass
+            rows = ladder_rows(pid, ev, dist, playbook["fees"])
+            med = implied_median(rows)
+            print(f"{pid:<9}{ev['event_ticker']:<28}{ev['close']:<22}{(ev['close_unix']-now)/86400:>5.1f}{pm.fmt(med, 3 if PRINTS[pid]['step'] < 1 else 0):>12}{pm.fmt(dist['mean'] if dist else None, 3 if PRINTS[pid]['step'] < 1 else 0):>12}{pm.fmt(dist['sigma'] if dist else None, 3 if PRINTS[pid]['step'] < 1 else 0):>10}")
+
+
+def cmd_nowcast(args):
+    if not args or args[0].upper() not in PRINTS:
+        die(f"usage: prints nowcast <{'|'.join(PRINTS)}> [--period YYYY-MM | YYYY-MM-DD]")
+    pid = args[0].upper()
+    period = arg_value(args, "--period")
+    if not period:
+        evs = open_events(pid, limit=3)
+        if not evs:
+            die("no open event to infer the period; pass --period")
+        period = target_period(pid, evs[0]["event_ticker"])
+    dist = MODELS[pid](period, today())
+    print(json.dumps({"print": pid, "model": PRINTS[pid]["model"], "target_period": period, "asof": today(),
+                      "mean": dist["mean"], "sigma": dist["sigma"], "horizon": dist["horizon"], "inputs": dist["inputs"],
+                      "gaps": dist["gaps"], "note": MODEL_NOTES[PRINTS[pid]["model"]]}, indent=2))
+
+
+def cmd_ladder(args):
+    if not args:
+        die("usage: prints ladder <EVENT_TICKER>")
+    ev_t = args[0]
+    pid = next((p for p, c in PRINTS.items() if ev_t.startswith(c["series"] + "-")), None)
+    if not pid:
+        die(f"{ev_t} is not in a supported series")
+    playbook, _ = load_playbook()
+    ev = event_by_ticker(pid, ev_t)
+    dist = None
+    try:
+        dist = MODELS[pid](target_period(pid, ev_t), today())
+    except PMError as e:
+        eprint(f"prints: model unavailable: {e}")
+    rows = ladder_rows(pid, ev, dist, playbook["fees"])
+    print(f"{ev_t}  close {ev['close']}  model mean {pm.fmt(dist['mean'] if dist else None, 4)} sigma {pm.fmt(dist['sigma'] if dist else None, 4)}  market median {implied_median(rows)}")
+    print(f"{'strike':>10}{'p_model':>9}{'bid':>7}{'ask':>7}{'spread':>8}{'ev yes':>8}{'ev no':>8}{'vol':>10}")
+    for r in rows:
+        print(f"{r['strike']:>10}{pm.fmt(r['p_model'],3):>9}{pm.fmt(r['yes_bid'],2):>7}{pm.fmt(r['yes_ask'],2):>7}{pm.fmt(r['spread'],2):>8}{pm.fmt(r['edge_yes']['ev_per_contract'],3):>8}{pm.fmt(r['edge_no']['ev_per_contract'],3):>8}{pm.fmt(r['volume'],0):>10}")
+
+
+def cmd_ticket(args):
+    if not args or args[0].upper() not in PRINTS:
+        die(f"usage: prints ticket <{'|'.join(PRINTS)}> [--event EVENT_TICKER]")
+    pid = args[0].upper()
+    playbook, ref = load_playbook()
+    ev_t = arg_value(args, "--event")
+    ev = event_by_ticker(pid, ev_t) if ev_t else (open_events(pid, limit=4) or [None])[0]
+    if ev is None:
+        die(f"no open event for {pid}")
+    ticket_id = f"{pid}-{ev['event_ticker']}-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
+    path = tickets_dir() / f"{ticket_id}.json"
+    if path.exists():
+        die(f"ticket {path.relative_to(ROOT)} already exists — one frozen ticket per event per day. Read it.", 3)
+    t = build_ticket(pid, ev, playbook, ref)
+    write_json(path, t)
+    d = t["decision"]
+    if not pm.OPTS["quiet"]:
+        eprint(f"prints: wrote {path.relative_to(ROOT)}  decision={d['status']} {d.get('side') or ''} {d.get('market_ticker') or ''} ask={d.get('limit_price')} x{d.get('contracts')}")
+    print(json.dumps(t, indent=2))
+
+
+def cmd_record(args):
+    if not args:
+        die("usage: prints record <ticket_id> --side yes|no --price P --contracts N [--market TICKER] [--replace]")
+    path = tickets_dir() / f"{args[0]}.json"
+    if not path.exists():
+        die(f"no ticket {args[0]}")
+    t = read_json(path)
+    side = (arg_value(args, "--side") or "").lower()
+    price = fnum(arg_value(args, "--price"))
+    contracts = arg_value(args, "--contracts")
+    if side not in ("yes", "no") or price is None or not contracts:
+        die("need --side yes|no --price P --contracts N")
+    contracts = int(contracts)
+    market = arg_value(args, "--market") or t["decision"].get("market_ticker")
+    if not market:
+        die("desk made no call on this ticket; pass --market TICKER for the strike you traded")
+    if t.get("execution") and "--replace" not in args:
+        die("execution already recorded; pass --replace to supersede (old record kept in execution_history)", 3)
+    fee = pm.fee_per_contract(t["fees"], price)
+    ex = {"market_ticker": market, "side": side, "price": price, "contracts": contracts, "fee_per_contract": fee,
+          "stake": round(contracts * (price + fee), 2), "at": arg_value(args, "--at") or iso(pm.now_unix()),
+          "against_desk": t["decision"]["status"] != "play" or t["decision"].get("side") != side or t["decision"].get("market_ticker") != market,
+          "note": arg_value(args, "--note")}
+    if t.get("execution"):
+        t.setdefault("execution_history", []).append(t["execution"])
+    t["execution"] = ex
+    write_json(path, t)
+    print(json.dumps(ex, indent=2))
+
+
+def cmd_settle(args):
+    now = pm.now_unix()
+    settled, pending, errors = [], [], []
+    for t in all_tickets():
+        if t.get("outcome"):
+            continue
+        if parse_iso(t["release_close"]) + 1800 > now:
+            continue
+        try:
+            r = settle_ticket(t)
+        except PMError as e:
+            errors.append({"ticket_id": t["ticket_id"], "error": str(e)})
+            continue
+        if r is None:
+            pending.append(t["ticket_id"])
+            continue
+        outcome, entry = r
+        t["outcome"] = outcome
+        write_json(tickets_dir() / f"{t['ticket_id']}.json", t)
+        p = ledger_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a") as f:
+            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+        settled.append({k: entry[k] for k in ("ticket_id", "model_mean", "z", "brier_ladder_model", "brier_ladder_market", "pnl_paper", "pnl_real")} | {"printed": outcome["printed"], "decision": entry["decision"]["status"]})
+        time.sleep(0.1)
+    playbook, _ = load_playbook()
+    cal = compute_calibration(read_ledger(), playbook)
+    write_json(STATE / "calibration.json", cal)
+    print(json.dumps({"settled": settled, "pending_result": pending, "errors": errors, "gate": cal["gate"]}, indent=2))
+
+
+def cmd_calibrate(args):
+    playbook, _ = load_playbook()
+    cal = compute_calibration(read_ledger(), playbook)
+    write_json(STATE / "calibration.json", cal)
+    if "--json" in args:
+        print(json.dumps(cal, indent=2))
+        return
+    print(f"settled tickets {cal['n_settled_tickets']}, distinct events {cal['n_settled_events']}, with market {cal['n_events_with_market']}")
+    print(f"ladder Brier  model {cal['brier_ladder_model']}   market {cal['brier_ladder_market']}")
+    print(f"coverage 1σ {cal['coverage_1sigma']}  2σ {cal['coverage_2sigma']}  (n={cal['n_z']}; honest sigmas give 0.68 / 0.95)")
+    d = cal["decisions"]
+    print(f"decisions: {d['n']}  hit {d['hit_rate']}  mean P/L per contract {d['mean_pnl_per_contract']}")
+    print(f"real: {cal['real']['n']} fills, total P/L {cal['real']['total_pnl']}")
+    print(f"GATE: {cal['gate']['stage'].upper()} — {cal['gate']['reason']}")
+
+
+def cmd_replay(args):
+    if not args or args[0].upper() not in PRINTS:
+        die(f"usage: prints replay <{'|'.join(PRINTS)}> [--periods N]")
+    pid = args[0].upper()
+    periods = int(arg_value(args, "--periods") or (156 if pid == "CLAIMS" else 60))
+    playbook, _ = load_playbook()
+    rep = replay_history(pid, periods, playbook)
+    out = STATE / "replay" / f"{pid}-history-{today()}.json"
+    write_json(out, rep)
+    if "--json" in args:
+        print(json.dumps(rep, indent=2))
+        return
+    print(f"{pid} — {rep['model']} — {rep['n']} periods, {rep['first']} .. {rep['last']}")
+    print(f"mean abs error {rep['mean_abs_error']}   naive last-value MAE {rep['naive_last_value_mae']}   mean sigma {rep['mean_sigma']}")
+    print(f"coverage 1σ {rep['coverage_1sigma']}  2σ {rep['coverage_2sigma']}   z mean {rep['z_mean']}  z stdev {rep['z_stdev']}")
+    print(f"PIT deciles {rep['pit_histogram_deciles']}   synthetic ladder Brier {rep['synthetic_ladder_brier']}")
+    for r in rep["last_periods"]:
+        print(f"  {r['period']}: actual {r['actual']}  model {r['mean']} ± {r['sigma']}")
+    for c in rep["caveats"]:
+        print(f"! {c}")
+    eprint(f"prints: wrote {out.relative_to(ROOT)}")
+
+
+def cmd_replay_market(args):
+    if not args or args[0].upper() not in PRINTS:
+        die(f"usage: prints replay-market <{'|'.join(PRINTS)}>")
+    pid = args[0].upper()
+    playbook, _ = load_playbook()
+    rep = replay_market(pid, playbook)
+    out = STATE / "replay" / f"{pid}-market-{today()}.json"
+    write_json(out, rep)
+    if "--json" in args:
+        print(json.dumps(rep, indent=2))
+        return
+    print(f"{pid} — {rep['n_events']} settled events (skipped {rep['skipped']})")
+    print(f"ladder Brier model {rep['brier_model']} vs market {rep['brier_market']}  model beats market: {rep['model_beats_market']}")
+    print(f"hypothetical trades at playbook rules: {rep['trades']}, total P/L per contract {rep['trade_pnl_total']}")
+    for e in rep["events"]:
+        tr = e["trade"]
+        print(f"  {e['event']:<28} printed {e['printed']!s:>9} model {e['model_mean']} ± {e['model_sigma']}  z {e['z']}  brier {e['brier_model']} / {e['brier_market']}" + (f"  trade {tr['side']} {tr['ticker']} @ {tr['ask']} -> {tr['pnl']}" if tr else ""))
+    for c in rep["caveats"]:
+        print(f"! {c}")
+    eprint(f"prints: wrote {out.relative_to(ROOT)}")
+
+
+def cmd_playbook(args):
+    if not args or args[0] != "init":
+        die("usage: prints playbook init [--prints CPI,CLAIMS] [--max-stake N] [--days 7]")
+    date = today()
+    days = int(arg_value(args, "--days") or 7)
+    path = playbook_dir() / f"{date}.json"
+    if path.exists():
+        die(f"{path.relative_to(ROOT)} exists — frozen; append to revisions instead", 3)
+    pb = json.loads(json.dumps(DEFAULT_PLAYBOOK))
+    if arg_value(args, "--prints"):
+        pb["prints"] = [p.upper() for p in arg_value(args, "--prints").split(",")]
+    if arg_value(args, "--max-stake"):
+        pb["capital"]["max_stake_per_event"] = float(arg_value(args, "--max-stake"))
+    cal = read_json(STATE / "calibration.json") if (STATE / "calibration.json").exists() else None
+    doc = {"schema_version": "1.0", "session_date": date,
+           "valid_until": (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d"),
+           "generated_at": iso(pm.now_unix()), "frozen": True, "revisions": [],
+           "venue": "robinhood", "exchange": "kalshi",
+           "gate_at_open": cal["gate"] if cal else {"stage": "paper", "reason": "no calibration file yet"},
+           **pb, "notes": None}
+    write_json(path, doc)
+    print(json.dumps(doc, indent=2))
+    eprint(f"prints: wrote {path.relative_to(ROOT)} — validate, edit, commit")
+
+
+COMMANDS = {"calendar": cmd_calendar, "nowcast": cmd_nowcast, "ladder": cmd_ladder, "ticket": cmd_ticket,
+            "record": cmd_record, "settle": cmd_settle, "calibrate": cmd_calibrate, "replay": cmd_replay,
+            "replay-market": cmd_replay_market, "playbook": cmd_playbook, "budget": pm.cmd_budget}
+
+
+def main(argv):
+    args = argv[1:]
+    while args and args[0].startswith("--"):
+        f = args.pop(0)
+        if f == "--no-capture":
+            pm.OPTS["capture"] = False
+        elif f == "--quiet":
+            pm.OPTS["quiet"] = True
+        else:
+            die(f"unknown flag {f}")
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 2
+    sub, rest = args[0], args[1:]
+    if sub not in COMMANDS:
+        die(f"unknown subcommand {sub}; expected one of {', '.join(COMMANDS)}")
+    try:
+        COMMANDS[sub](rest)
+    except PMError as e:
+        die(str(e))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

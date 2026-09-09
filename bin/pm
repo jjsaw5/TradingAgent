@@ -292,10 +292,11 @@ def kalshi_quote(market: dict, book: dict):
     return q
 
 
-def kalshi_candles(series: str, ticker: str, start: int, end: int):
+def kalshi_candles(series: str, ticker: str, start: int, end: int, period_interval: int = 1):
+    """Candles in minutes per bar: 1, 60 or 1440."""
     data = http_get(
         KALSHI, f"/series/{series}/markets/{ticker}/candlesticks",
-        {"start_ts": start, "end_ts": end, "period_interval": 1},
+        {"start_ts": start, "end_ts": end, "period_interval": period_interval},
         slug=f"kalshi_candles_{ticker}",
     )
     return data.get("candlesticks", [])

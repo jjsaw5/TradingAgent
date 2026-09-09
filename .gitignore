@@ -12,3 +12,6 @@ state/raw/**
 *.pyc
 __pycache__/
 node_modules/
+
+# Cached FRED/ALFRED pulls for the print desk. Regenerated on demand.
+state/cache/**

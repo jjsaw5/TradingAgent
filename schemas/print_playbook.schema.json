@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://market-desk/schemas/print_playbook.schema.json",
+  "title": "Economic-Print Playbook",
+  "description": "The frozen contract for a week of scheduled economic prints: which prints, the entry rules, the fee model, the stake and loss limits, and the calibration gate as it stood. Written by /print-open, applied mechanically by bin/prints to every event, valid until valid_until. Changes are appended to revisions with a reason.",
+  "type": "object",
+  "required": ["schema_version", "session_date", "valid_until", "generated_at", "frozen", "venue", "exchange", "prints", "fees", "rules", "capital", "gate", "gate_at_open"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "session_date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "valid_until": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "frozen": { "type": "boolean" },
+    "revisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["at", "field", "from", "to", "reason"],
+        "properties": {
+          "at": { "type": "string", "format": "date-time" },
+          "field": { "type": "string" },
+          "from": {},
+          "to": {},
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "venue": { "const": "robinhood" },
+    "exchange": { "const": "kalshi" },
+    "gate_at_open": {
+      "type": "object",
+      "required": ["stage", "reason"],
+      "properties": {
+        "stage": { "enum": ["paper", "minimum", "full"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "prints": {
+      "type": "array",
+      "maxItems": 6,
+      "items": { "enum": ["CPI", "CPICORE", "CPIYOY", "PAYROLLS", "U3", "CLAIMS"] }
+    },
+    "fees": {
+      "type": "object",
+      "required": ["model", "verified"],
+      "properties": {
+        "model": { "enum": ["robinhood_flat", "kalshi_quadratic", "none"] },
+        "commission_per_contract": { "type": "number", "minimum": 0 },
+        "exchange_fee_per_contract": { "type": "number", "minimum": 0 },
+        "rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "verified": { "type": "boolean" }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "required": ["min_edge_per_contract", "max_model_confidence", "max_spread", "max_horizon_days", "min_hours_to_release"],
+      "properties": {
+        "min_edge_per_contract": { "type": "number", "minimum": 0, "maximum": 1 },
+        "max_model_confidence": { "type": "number", "minimum": 0.5, "maximum": 1 },
+        "max_spread": { "type": "number", "minimum": 0, "maximum": 1, "description": "Strikes quoted wider than this are not candidates. Print ladders are thin away from the mean and a wide spread is the market saying it does not know either." },
+        "min_ask_size": { "type": "number", "minimum": 0 },
+        "max_horizon_days": { "type": "number", "minimum": 0, "description": "Only events releasing within this many days are evaluated. Further out the model's sigma is an extrapolation." },
+        "min_hours_to_release": { "type": "number", "minimum": 0 }
+      }
+    },
+    "capital": {
+      "type": "object",
+      "required": ["max_stake_per_event", "max_weekly_loss", "max_open_events", "paper_stake"],
+      "properties": {
+        "max_stake_per_event": { "type": "number", "exclusiveMinimum": 0 },
+        "max_weekly_loss": { "type": "number", "exclusiveMinimum": 0 },
+        "max_open_events": { "type": "integer", "minimum": 1 },
+        "paper_stake": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "required": ["min_events_for_minimum", "min_events_for_full", "min_decisions_for_full", "minimum_stake"],
+      "properties": {
+        "min_events_for_minimum": { "type": "integer", "minimum": 1 },
+        "min_events_for_full": { "type": "integer", "minimum": 1 },
+        "min_decisions_for_full": { "type": "integer", "minimum": 1 },
+        "minimum_stake": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "notes": { "type": ["string", "null"], "maxLength": 1000 }
+  }
+}

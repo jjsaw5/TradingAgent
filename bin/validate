@@ -48,6 +48,9 @@ INFER_STEMS = {
     "pm_ledger": "pm_ledger_entry",
     "pm_ticket": "pm_ticket",
     "pm_playbook": "pm_playbook",
+    "print_ticket": "print_ticket",
+    "print_playbook": "print_playbook",
+    "print_ledger": "print_ledger_entry",
     "watchlist": "watchlist",
     "alert_state": "alert_state",
     "market_brief": "market_brief",
@@ -55,7 +58,21 @@ INFER_STEMS = {
 }
 
 
+PRINT_PARTS = {"playbook": "print_playbook", "tickets": "print_ticket"}
+PRINT_STEMS = {"ledger": "print_ledger_entry", "print_ledger": "print_ledger_entry",
+               "print_ticket": "print_ticket", "print_playbook": "print_playbook"}
+
+
 def infer_schema(path: Path) -> str | None:
+    # the print desk lives under state/pm/prints/ and has its own contracts
+    if "prints" in path.parts[:-1]:
+        for part in path.parts[:-1]:
+            if part in PRINT_PARTS:
+                return PRINT_PARTS[part]
+        for key in sorted(PRINT_STEMS, key=len, reverse=True):
+            if path.stem.startswith(key):
+                return PRINT_STEMS[key]
+        return None
     for part in path.parts[:-1]:
         if part in INFER_PARTS:
             return INFER_PARTS[part]

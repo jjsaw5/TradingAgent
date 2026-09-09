@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "session_date": "2026-09-09",
+  "valid_until": "2026-09-16",
+  "generated_at": "2026-09-09T02:45:53Z",
+  "frozen": true,
+  "revisions": [],
+  "venue": "robinhood",
+  "exchange": "kalshi",
+  "gate_at_open": {
+    "stage": "paper",
+    "reason": "no calibration file yet"
+  },
+  "prints": [
+    "CPI",
+    "CLAIMS"
+  ],
+  "fees": {
+    "model": "robinhood_flat",
+    "commission_per_contract": 0.01,
+    "exchange_fee_per_contract": 0.01,
+    "verified": false
+  },
+  "rules": {
+    "min_edge_per_contract": 0.08,
+    "max_model_confidence": 0.9,
+    "max_spread": 0.1,
+    "min_ask_size": 20,
+    "max_horizon_days": 10,
+    "min_hours_to_release": 1
+  },
+  "capital": {
+    "max_stake_per_event": 50,
+    "max_weekly_loss": 150,
+    "max_open_events": 3,
+    "paper_stake": 10
+  },
+  "gate": {
+    "min_events_for_minimum": 20,
+    "min_events_for_full": 60,
+    "min_decisions_for_full": 20,
+    "minimum_stake": 10
+  },
+  "notes": "Worked example. Gate is paper: every call is logged, none is sized. Fees unverified until confirmed in the Robinhood app."
+}

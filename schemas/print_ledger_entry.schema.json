@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://market-desk/schemas/print_ledger_entry.schema.json",
+  "title": "Economic-Print Ledger Entry",
+  "description": "One line of state/pm/prints/ledger.jsonl per settled ticket. Append-only. Carries the model's distribution, the print, the standardized error z, the ladder Brier for model and market, the desk's decision and the client's fill, each with its own P/L. The calibration gate reads one line per event (the last ticket before release).",
+  "type": "object",
+  "required": ["schema_version", "ticket_id", "ticket_ref", "print", "event_ticker", "target_period", "decided_at", "model_mean", "model_sigma", "z", "decision", "outcome", "pnl_paper_per_contract", "pnl_real", "brier_ladder_model", "brier_ladder_market", "settled_at"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "ticket_id": { "type": "string" },
+    "ticket_ref": { "type": "string" },
+    "print": { "type": "string" },
+    "event_ticker": { "type": "string" },
+    "target_period": { "type": "string" },
+    "decided_at": { "type": "string", "format": "date-time" },
+    "hours_to_close": { "type": ["number", "null"] },
+    "model_mean": { "type": ["number", "null"] },
+    "model_sigma": { "type": ["number", "null"] },
+    "z": { "type": ["number", "null"], "description": "(printed - mean) / sigma. Honest sigmas put 68% of these inside ±1." },
+    "market_implied_median": { "type": ["number", "null"] },
+    "decision": {
+      "type": "object",
+      "required": ["status", "side"],
+      "properties": {
+        "status": { "type": "string" },
+        "market_ticker": { "type": ["string", "null"] },
+        "side": { "enum": ["yes", "no", null] },
+        "strike": { "type": ["number", "null"] },
+        "limit_price": { "type": ["number", "null"] },
+        "contracts": { "type": ["integer", "null"] },
+        "stake": { "type": ["number", "null"] },
+        "ev_per_contract": { "type": ["number", "null"] },
+        "p_model_side": { "type": ["number", "null"] },
+        "gate": { "type": ["string", "null"] }
+      }
+    },
+    "execution": {
+      "type": ["object", "null"],
+      "properties": {
+        "side": { "enum": ["yes", "no"] },
+        "price": { "type": "number" },
+        "contracts": { "type": "integer" },
+        "stake": { "type": "number" },
+        "at": { "type": "string" }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "required": ["printed", "kalshi_result", "settled_at"],
+      "properties": {
+        "printed": { "type": ["number", "null"] },
+        "chosen_result": { "enum": ["yes", "no", null] },
+        "kalshi_result": { "type": "string" },
+        "settled_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "pnl_paper_per_contract": { "type": ["number", "null"] },
+    "pnl_paper": { "type": ["number", "null"] },
+    "pnl_real": { "type": ["number", "null"] },
+    "brier_ladder_model": { "type": ["number", "null"] },
+    "brier_ladder_market": { "type": ["number", "null"] },
+    "settled_at": { "type": "string", "format": "date-time" },
+    "corrects": { "type": ["string", "null"] }
+  }
+}

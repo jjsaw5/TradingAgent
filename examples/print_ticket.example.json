@@ -1,0 +1,508 @@
+{
+  "schema_version": "1.0",
+  "ticket_id": "CPI-KXCPI-26AUG-20260909",
+  "print": "CPI",
+  "print_title": "CPI, month-over-month, headline, seasonally adjusted",
+  "venue": "robinhood",
+  "exchange": "kalshi",
+  "event_ticker": "KXCPI-26AUG",
+  "event_title": "CPI in August",
+  "target_period": "2026-08",
+  "release_close": "2026-09-11T12:25:00Z",
+  "hours_to_close": 57.66,
+  "decided_at": "2026-09-09T02:45:23Z",
+  "playbook_ref": null,
+  "model": {
+    "name": "cpi_gas_core_v1",
+    "mean": 0.23533,
+    "sigma": 0.18267,
+    "horizon": 1,
+    "inputs": {
+      "last_month": "2026-07",
+      "core_trend": 0.1356,
+      "gas_mom_pct": 3.198,
+      "gas_weeks": 5,
+      "ols_a": -0.0105,
+      "ols_c": 0.03446,
+      "ols_n": 118
+    },
+    "unit": "pct",
+    "note": "MODELED. Headline MoM = trailing-3 core MoM + a + c*(gasoline price MoM), a and c fit by OLS on the trailing 120 months of FRED data; sigma is the residual stdev. Gasoline is the monthly average of weekly retail prices, partial-month when the month is not over. No shelter, food or tariff information beyond what is in the core trend."
+  },
+  "market_implied_median": 0.3165,
+  "ladder": [
+    {
+      "ticker": "KXCPI-26AUG-T-0.4",
+      "strike": -0.4,
+      "rule": "greater",
+      "p_model": 0.9993,
+      "yes_bid": 0.99,
+      "yes_ask": null,
+      "no_bid": null,
+      "no_ask": 0.01,
+      "mid": null,
+      "volume": 29334.27,
+      "open_interest": 17569.27,
+      "spread": null,
+      "edge_yes": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      },
+      "edge_no": {
+        "ask": 0.01,
+        "fee": 0.02,
+        "cost": 0.03,
+        "ev_per_contract": -0.0293,
+        "breakeven_p": 0.03,
+        "kelly_fraction": -0.0302
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T-0.3",
+      "strike": -0.3,
+      "rule": "greater",
+      "p_model": 0.9961,
+      "yes_bid": 0.99,
+      "yes_ask": null,
+      "no_bid": null,
+      "no_ask": 0.01,
+      "mid": null,
+      "volume": 21099.51,
+      "open_interest": 11116.7,
+      "spread": null,
+      "edge_yes": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      },
+      "edge_no": {
+        "ask": 0.01,
+        "fee": 0.02,
+        "cost": 0.03,
+        "ev_per_contract": -0.0261,
+        "breakeven_p": 0.03,
+        "kelly_fraction": -0.0269
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T-0.2",
+      "strike": -0.2,
+      "rule": "greater",
+      "p_model": 0.9825,
+      "yes_bid": 0.97,
+      "yes_ask": null,
+      "no_bid": null,
+      "no_ask": 0.03,
+      "mid": null,
+      "volume": 3689.0,
+      "open_interest": 2913.05,
+      "spread": null,
+      "edge_yes": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      },
+      "edge_no": {
+        "ask": 0.03,
+        "fee": 0.02,
+        "cost": 0.05,
+        "ev_per_contract": -0.0325,
+        "breakeven_p": 0.05,
+        "kelly_fraction": -0.0343
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T-0.1",
+      "strike": -0.1,
+      "rule": "greater",
+      "p_model": 0.9409,
+      "yes_bid": 0.98,
+      "yes_ask": null,
+      "no_bid": null,
+      "no_ask": 0.02,
+      "mid": null,
+      "volume": 5780.14,
+      "open_interest": 4432.14,
+      "spread": null,
+      "edge_yes": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      },
+      "edge_no": {
+        "ask": 0.02,
+        "fee": 0.02,
+        "cost": 0.04,
+        "ev_per_contract": 0.0191,
+        "breakeven_p": 0.04,
+        "kelly_fraction": 0.0199
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T0.0",
+      "strike": 0.0,
+      "rule": "greater",
+      "p_model": 0.8448,
+      "yes_bid": 0.98,
+      "yes_ask": null,
+      "no_bid": null,
+      "no_ask": 0.02,
+      "mid": null,
+      "volume": 13156.46,
+      "open_interest": 10870.63,
+      "spread": null,
+      "edge_yes": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      },
+      "edge_no": {
+        "ask": 0.02,
+        "fee": 0.02,
+        "cost": 0.04,
+        "ev_per_contract": 0.1152,
+        "breakeven_p": 0.04,
+        "kelly_fraction": 0.12
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T0.1",
+      "strike": 0.1,
+      "rule": "greater",
+      "p_model": 0.6798,
+      "yes_bid": 0.82,
+      "yes_ask": 0.98,
+      "no_bid": 0.02,
+      "no_ask": 0.18,
+      "mid": 0.9,
+      "volume": 60141.64,
+      "open_interest": 33991.86,
+      "spread": 0.16,
+      "edge_yes": {
+        "ask": 0.98,
+        "fee": 0.02,
+        "cost": 1.0,
+        "ev_per_contract": -0.3202,
+        "breakeven_p": 1.0,
+        "kelly_fraction": null
+      },
+      "edge_no": {
+        "ask": 0.18,
+        "fee": 0.02,
+        "cost": 0.2,
+        "ev_per_contract": 0.1202,
+        "breakeven_p": 0.2,
+        "kelly_fraction": 0.1503
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T0.2",
+      "strike": 0.2,
+      "rule": "greater",
+      "p_model": 0.468,
+      "yes_bid": 0.83,
+      "yes_ask": 0.95,
+      "no_bid": 0.05,
+      "no_ask": 0.17,
+      "mid": 0.89,
+      "volume": 50173.95,
+      "open_interest": 16899.26,
+      "spread": 0.12,
+      "edge_yes": {
+        "ask": 0.95,
+        "fee": 0.02,
+        "cost": 0.97,
+        "ev_per_contract": -0.502,
+        "breakeven_p": 0.97,
+        "kelly_fraction": -16.7337
+      },
+      "edge_no": {
+        "ask": 0.17,
+        "fee": 0.02,
+        "cost": 0.19,
+        "ev_per_contract": 0.342,
+        "breakeven_p": 0.19,
+        "kelly_fraction": 0.4222
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T0.3",
+      "strike": 0.3,
+      "rule": "greater",
+      "p_model": 0.2651,
+      "yes_bid": 0.55,
+      "yes_ask": 0.6,
+      "no_bid": 0.4,
+      "no_ask": 0.45,
+      "mid": 0.575,
+      "volume": 63058.55,
+      "open_interest": 25301.78,
+      "spread": 0.05,
+      "edge_yes": {
+        "ask": 0.6,
+        "fee": 0.02,
+        "cost": 0.62,
+        "ev_per_contract": -0.3549,
+        "breakeven_p": 0.62,
+        "kelly_fraction": -0.934
+      },
+      "edge_no": {
+        "ask": 0.45,
+        "fee": 0.02,
+        "cost": 0.47,
+        "ev_per_contract": 0.2649,
+        "breakeven_p": 0.47,
+        "kelly_fraction": 0.4999
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T0.4",
+      "strike": 0.4,
+      "rule": "greater",
+      "p_model": 0.12,
+      "yes_bid": 0.11,
+      "yes_ask": 0.13,
+      "no_bid": 0.87,
+      "no_ask": 0.89,
+      "mid": 0.12,
+      "volume": 68576.8,
+      "open_interest": 28063.68,
+      "spread": 0.02,
+      "edge_yes": {
+        "ask": 0.13,
+        "fee": 0.02,
+        "cost": 0.15,
+        "ev_per_contract": -0.03,
+        "breakeven_p": 0.15,
+        "kelly_fraction": -0.0354
+      },
+      "edge_no": {
+        "ask": 0.89,
+        "fee": 0.02,
+        "cost": 0.91,
+        "ev_per_contract": -0.03,
+        "breakeven_p": 0.91,
+        "kelly_fraction": -0.3328
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T0.5",
+      "strike": 0.5,
+      "rule": "greater",
+      "p_model": 0.0425,
+      "yes_bid": null,
+      "yes_ask": 0.1,
+      "no_bid": 0.9,
+      "no_ask": null,
+      "mid": null,
+      "volume": 48423.46,
+      "open_interest": 37021.53,
+      "spread": null,
+      "edge_yes": {
+        "ask": 0.1,
+        "fee": 0.02,
+        "cost": 0.12,
+        "ev_per_contract": -0.0775,
+        "breakeven_p": 0.12,
+        "kelly_fraction": -0.0881
+      },
+      "edge_no": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T0.6",
+      "strike": 0.6,
+      "rule": "greater",
+      "p_model": 0.0116,
+      "yes_bid": null,
+      "yes_ask": 0.03,
+      "no_bid": 0.97,
+      "no_ask": null,
+      "mid": null,
+      "volume": 20325.56,
+      "open_interest": 14823.45,
+      "spread": null,
+      "edge_yes": {
+        "ask": 0.03,
+        "fee": 0.02,
+        "cost": 0.05,
+        "ev_per_contract": -0.0384,
+        "breakeven_p": 0.05,
+        "kelly_fraction": -0.0404
+      },
+      "edge_no": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T0.7",
+      "strike": 0.7,
+      "rule": "greater",
+      "p_model": 0.0024,
+      "yes_bid": null,
+      "yes_ask": 0.01,
+      "no_bid": 0.99,
+      "no_ask": null,
+      "mid": null,
+      "volume": 8173.28,
+      "open_interest": 7626.79,
+      "spread": null,
+      "edge_yes": {
+        "ask": 0.01,
+        "fee": 0.02,
+        "cost": 0.03,
+        "ev_per_contract": -0.0276,
+        "breakeven_p": 0.03,
+        "kelly_fraction": -0.0284
+      },
+      "edge_no": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T0.8",
+      "strike": 0.8,
+      "rule": "greater",
+      "p_model": 0.0004,
+      "yes_bid": null,
+      "yes_ask": 0.01,
+      "no_bid": 0.99,
+      "no_ask": null,
+      "mid": null,
+      "volume": 20857.56,
+      "open_interest": 14393.78,
+      "spread": null,
+      "edge_yes": {
+        "ask": 0.01,
+        "fee": 0.02,
+        "cost": 0.03,
+        "ev_per_contract": -0.0296,
+        "breakeven_p": 0.03,
+        "kelly_fraction": -0.0305
+      },
+      "edge_no": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T0.9",
+      "strike": 0.9,
+      "rule": "greater",
+      "p_model": 0.0,
+      "yes_bid": null,
+      "yes_ask": 0.01,
+      "no_bid": 0.99,
+      "no_ask": null,
+      "mid": null,
+      "volume": 3065.54,
+      "open_interest": 2824.54,
+      "spread": null,
+      "edge_yes": {
+        "ask": 0.01,
+        "fee": 0.02,
+        "cost": 0.03,
+        "ev_per_contract": -0.03,
+        "breakeven_p": 0.03,
+        "kelly_fraction": -0.0309
+      },
+      "edge_no": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      }
+    },
+    {
+      "ticker": "KXCPI-26AUG-T1.0",
+      "strike": 1.0,
+      "rule": "greater",
+      "p_model": 0.0,
+      "yes_bid": null,
+      "yes_ask": 0.01,
+      "no_bid": 0.99,
+      "no_ask": null,
+      "mid": null,
+      "volume": 1123.98,
+      "open_interest": 962.98,
+      "spread": null,
+      "edge_yes": {
+        "ask": 0.01,
+        "fee": 0.02,
+        "cost": 0.03,
+        "ev_per_contract": -0.03,
+        "breakeven_p": 0.03,
+        "kelly_fraction": -0.0309
+      },
+      "edge_no": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      }
+    }
+  ],
+  "fees": {
+    "model": "robinhood_flat",
+    "commission_per_contract": 0.01,
+    "exchange_fee_per_contract": 0.01,
+    "verified": false
+  },
+  "decision": {
+    "status": "paper",
+    "market_ticker": "KXCPI-26AUG-T0.3",
+    "side": "no",
+    "strike": 0.3,
+    "limit_price": 0.45,
+    "contracts": 2,
+    "stake": 0.94,
+    "max_loss": 0.94,
+    "ev_per_contract": 0.2649,
+    "p_model_side": 0.7349,
+    "gate": "paper",
+    "reason": "no playbook in force \u2014 paper only (run /print-open); only 2.0 at the ask (min 20) \u2014 expect partial or pay up; cut to 2, the displayed size"
+  },
+  "gaps": [],
+  "execution": null,
+  "outcome": null
+}

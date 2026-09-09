@@ -135,15 +135,17 @@ Rotate it — do not reason about who might have seen it.
 ```
 .claude/agents/       market-brief, flow-analyst, position-monitor
 .claude/skills/       open-desk, desk-monitor, close-desk        (options desk)
-                      pm-open, pm-window, pm-review              (prediction-market desk)
+                      pm-open, pm-window, pm-review              (15-minute prediction-market desk)
+                      print-open, print-check, print-review      (economic-print desk)
 schemas/              the artifact contracts — read these first
-examples/             a fully worked watchlist, playbook and ticket, for reference
+examples/             worked watchlist, playbooks and tickets, for reference
 bin/uw                UW REST wrapper; captures raw responses for replay
-bin/pm                prediction-market tool: Kalshi data, pricer, tickets, ledger, replay
+bin/pm                15-minute desk: Kalshi data, pricer, tickets, ledger, replay
+bin/prints            print desk: Kalshi ladders, FRED nowcasts, tickets, ledger, replay
 bin/validate          schema check; run before writing any artifact
-tests/                offline tests for the pricer and decision rules
-state/                briefs, flow, watchlist, alerts, positions, pm, raw
-docs/                 ARCHITECTURE, UW_ENDPOINTS, RUNBOOK, PREDICTION_MARKETS
+tests/                offline tests for the pricers and decision rules
+state/                briefs, flow, watchlist, alerts, positions, pm, pm/prints, raw, cache
+docs/                 ARCHITECTURE, UW_ENDPOINTS, RUNBOOK, PREDICTION_MARKETS, ECONOMIC_PRINTS
 ```
 
 ## 10. The prediction-market desk
@@ -174,6 +176,15 @@ an edge could come from.
   so the two track records never blur.
 - **Cadence.** A live `/loop 5m /pm-window` session, not a Routine. When the
   session ends, the desk stops. Say so.
+
+**The economic-print desk** is the same machinery on Kalshi's strike ladders
+for CPI, core CPI, CPI YoY, payrolls, U-3 and weekly claims, with nowcast models
+built only from public FRED data (`docs/ECONOMIC_PRINTS.md`, `bin/prints`,
+skills `/print-open`, `/print-check`, `/print-review`). Its playbook is weekly,
+its ticket is one per event per day, its ledger and gate are separate from the
+15-minute desk's, and the gate counts one sample per event. Every model is
+labeled with what it does not know; where the market is expected to be better
+(payrolls, U-3), say so before the client asks.
 
 Every artifact is validated before it is written (`bin/validate <file>`). An
 artifact that does not validate is not a contract, and the stage downstream of it

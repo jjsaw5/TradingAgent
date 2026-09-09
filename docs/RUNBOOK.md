@@ -203,6 +203,61 @@ settle call is failing (`errors` will say). Leave it; never fill in a result.
 
 ---
 
+## The economic-print desk
+
+### Setup
+
+Nothing to configure. Kalshi and FRED are public. FRED pulls are cached under
+`state/cache/fred/` (gitignored) for six hours, because FRED serves full
+histories per call and drops connections under bursts.
+
+```bash
+python3 -m unittest tests/test_prints.py
+bin/prints calendar                        # supported prints, next events, market vs model
+bin/prints replay CLAIMS                   # ~1 min each; coverage and z stdev are the numbers to read
+bin/prints replay CPI
+bin/prints replay-market CLAIMS            # model vs ladder on the few settled events
+```
+
+Read `docs/ECONOMIC_PRINTS.md` §3 before trusting a replay. Confirm the
+Robinhood per-contract fee and set it in the playbook.
+
+### Dry run
+
+```
+/print-open           # playbook written, validated, committed
+/print-check          # tickets written for events inside the horizon
+bin/prints record ... # a pretend fill
+/print-review         # after the next release: ledger appends, gate recomputes
+```
+
+### Cadence
+
+Daily. Any of: run `/print-check` by hand each morning; `/loop 6h /print-check`
+in a live session; or a fresh-session Routine (`0 12 * * 1-5` UTC, prompt
+`Run /print-check. If no playbook is in force, exit quietly.`). Hourly cadence
+is legal for this desk, unlike the 15-minute one. Releases are at 08:30 ET; a
+check at 08:00 ET catches the last ticket before the ladder closes at 08:25.
+
+### Troubleshooting
+
+**Every nowcast fails with "no response" from FRED** — FRED's edge drops
+unfamiliar user agents and bursts. `bin/prints` sends the stock Python agent
+and spaces calls; if it still fails, wait a minute and retry, and never run
+several replays in parallel.
+
+**`too_far` on every print** — nothing releases inside `max_horizon_days`.
+Normal in the quiet week of the month.
+
+**CPI YoY shows no model for months beyond the next** — it needs the NSA index
+for the prior month, which does not exist yet. Expected.
+
+**Payrolls sigma looks enormous** — it is. The trend model's error on the first
+print is about 150k jobs. That is the honest number, and the reason the market
+is expected to beat it.
+
+---
+
 ## Troubleshooting
 
 **`bin/uw: UW_API_TOKEN is not set`** — `.env` missing or not readable. It is
