@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "session_date": "2026-09-08",
+  "generated_at": "2026-09-09T00:04:03Z",
+  "frozen": true,
+  "revisions": [],
+  "venue": "robinhood",
+  "exchange": "kalshi",
+  "gate_at_open": {
+    "stage": "paper",
+    "reason": "1 settled windows; need 100 before any real size"
+  },
+  "assets": [
+    "BTC",
+    "ETH"
+  ],
+  "model": {
+    "name": "driftless_lognormal_v1",
+    "vol_lookback_minutes": 120,
+    "vol_band_pct": 25
+  },
+  "fees": {
+    "model": "robinhood_flat",
+    "commission_per_contract": 0.01,
+    "exchange_fee_per_contract": 0.01,
+    "verified": false
+  },
+  "rules": {
+    "min_edge_per_contract": 0.05,
+    "min_seconds_remaining": 180,
+    "max_seconds_remaining": 780,
+    "max_model_confidence": 0.9,
+    "min_ask_size": 20,
+    "blackouts": [
+      {
+        "from": "2026-09-08T12:25:00Z",
+        "to": "2026-09-08T12:45:00Z",
+        "reason": "CPI at 08:30 ET — zero-drift assumption does not hold through a print"
+      }
+    ]
+  },
+  "capital": {
+    "max_stake_per_window": 50,
+    "max_session_loss": 150,
+    "max_concurrent_open": 2,
+    "paper_stake": 10
+  },
+  "gate": {
+    "min_settled_for_minimum": 100,
+    "min_settled_for_full": 300,
+    "min_decisions_for_full": 50,
+    "minimum_stake": 10
+  },
+  "notes": "Worked example. Gate is paper: every call this session is logged, none is sized."
+}

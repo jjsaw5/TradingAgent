@@ -74,7 +74,8 @@ review one", not in a paper account without saying so.
 This is enforced at the tool level in `.claude/settings.json`, not by instruction
 alone, because instructions drift under pressure and a deny-list does not. If you
 ever find yourself with an order tool available, treat it as a misconfiguration and
-say so.
+say so. That includes any Robinhood event-contract or Kalshi order tool that may
+appear in future: it goes in the deny-list before it is used once.
 
 You size, you recommend, you flag risk. The human executes.
 
@@ -133,14 +134,46 @@ Rotate it — do not reason about who might have seen it.
 
 ```
 .claude/agents/       market-brief, flow-analyst, position-monitor
-.claude/skills/       open-desk, desk-monitor, close-desk
+.claude/skills/       open-desk, desk-monitor, close-desk        (options desk)
+                      pm-open, pm-window, pm-review              (prediction-market desk)
 schemas/              the artifact contracts — read these first
-examples/             a fully worked watchlist, for reference
+examples/             a fully worked watchlist, playbook and ticket, for reference
 bin/uw                UW REST wrapper; captures raw responses for replay
+bin/pm                prediction-market tool: Kalshi data, pricer, tickets, ledger, replay
 bin/validate          schema check; run before writing any artifact
-state/                briefs, flow, watchlist, alerts, positions, raw
-docs/                 ARCHITECTURE, UW_ENDPOINTS, RUNBOOK
+tests/                offline tests for the pricer and decision rules
+state/                briefs, flow, watchlist, alerts, positions, pm, raw
+docs/                 ARCHITECTURE, UW_ENDPOINTS, RUNBOOK, PREDICTION_MARKETS
 ```
+
+## 10. The prediction-market desk
+
+A second desk on the same rules, for 15-minute crypto up/down contracts the
+client trades on Robinhood. Robinhood routes these to Kalshi, so every contract
+is a Kalshi contract with a published strike, settlement and result;
+`docs/PREDICTION_MARKETS.md` is the architecture and the honest account of where
+an edge could come from.
+
+- **The playbook is the watchlist.** `state/pm/playbook/<date>.json` freezes the
+  assets, entry rules, fee model, stake, loss limit and blackouts at `/pm-open`.
+  `bin/pm` applies it mechanically to every window; the desk never reinterprets it
+  window by window. Changes are appended `revisions` with a reason.
+- **One frozen ticket per asset per window**, passes included, so the model is
+  graded on everything it said. `no_model` and `no_quote` are gaps, not passes.
+- **Probabilities are modeled, labeled, and graded.** The desk says "the model has
+  it at 0.38, the market at 0.30, band 0.31–0.44" — never "a 38% chance". Every
+  ticket settles into an append-only ledger and the calibration gate holds real
+  stake at zero until the model measurably beats the market it bets against.
+- **Envelope** (playbook `capital`, enforced by `bin/pm ticket`): $50 max stake per
+  window, $150 session loss limit, 2 concurrent windows, paper stake $10. On a
+  binary the stake is the max loss. Client overrides are stated and written into
+  the playbook.
+- **Execution is the client's, by hand, on Robinhood.** The desk has no order
+  tools on any venue and cannot see event-contract positions; fills are recorded
+  as reported via `bin/pm record`, and a fill against the desk's call is flagged
+  so the two track records never blur.
+- **Cadence.** A live `/loop 5m /pm-window` session, not a Routine. When the
+  session ends, the desk stops. Say so.
 
 Every artifact is validated before it is written (`bin/validate <file>`). An
 artifact that does not validate is not a contract, and the stage downstream of it

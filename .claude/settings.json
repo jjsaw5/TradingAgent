@@ -4,6 +4,10 @@
     "allow": [
       "Bash(bin/uw:*)",
       "Bash(./bin/uw:*)",
+      "Bash(bin/pm:*)",
+      "Bash(./bin/pm:*)",
+      "Bash(bin/validate:*)",
+      "Bash(./bin/validate:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git status)",
@@ -37,7 +41,10 @@
       "mcp__Robinhood__exercise_option",
       "mcp__Robinhood__cancel_option_exercise",
       "mcp__Robinhood__review_option_order",
-      "mcp__Robinhood__review_equity_order"
+      "mcp__Robinhood__review_equity_order",
+      "mcp__Robinhood__place_crypto_order",
+      "mcp__Robinhood__preview_crypto_order",
+      "mcp__Robinhood__cancel_crypto_order"
     ]
   }
 }

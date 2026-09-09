@@ -1,0 +1,1300 @@
+#!/usr/bin/env python3
+"""
+pm — the prediction-market desk tool for 15-minute crypto up/down contracts.
+
+Execution venue: Robinhood event contracts. Robinhood routes these to Kalshi, so
+the contract you hold in Robinhood IS the Kalshi contract (e.g.
+KXBTC15M-26SEP081945-45): same strike, same settlement (60-second average of the
+CF Benchmarks real-time index before the close, compared with the same average
+before the open), same 15-minute clock. All market data here comes from Kalshi's
+public API, which needs no credentials. Coinbase supplies the spot price and the
+realized-vol estimate the model runs on. Polymarket is pulled only as a
+cross-reference — a second market's opinion on the same window — never as a venue.
+
+Nothing in this file places, cancels or modifies an order on any venue, and it
+holds no credentials. Robinhood's event-contract positions are not exposed by the
+Robinhood tools available to the desk, so fills are recorded with `pm record`
+after the client reports them.
+
+Subcommands
+  pm windows [--assets BTC,ETH]           current + next window per asset, quotes, model
+  pm quote <kalshi-ticker>                 one market: quote, book, strike, clock
+  pm spot <ASSET>                          Coinbase spot + realized vol
+  pm ticket <ASSET> [--window now|next]    build the frozen decision ticket for a window
+  pm record <window_id> --side up|down --price P --contracts N [--replace]
+                                          record a fill the client reports (by hand)
+  pm settle                                settle closed, unsettled tickets -> ledger
+  pm calibrate                             calibration + sizing gate from the ledger
+  pm replay <ASSET> [--windows 200] [--at-minutes 3,7,11]
+                                          grade the model against settled windows
+  pm playbook init [--assets ..] [--max-stake ..]   write today's default playbook
+  pm budget                                requests made today
+
+Flags (before the subcommand): --no-capture   do not persist raw responses
+                                --quiet        no stderr provenance lines
+
+Contract: stdout is JSON (or a table for `windows`/`calibrate`/`replay`) and
+nothing else. Any failure exits non-zero with a message on stderr. A missing
+measurement is null, never zero and never a carried-forward value.
+"""
+
+import json
+import math
+import os
+import statistics
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+STATE = ROOT / "state" / "pm"
+RAW = ROOT / "state" / "raw"
+
+KALSHI = "https://api.elections.kalshi.com/trade-api/v2"
+GAMMA = "https://gamma-api.polymarket.com"
+COINBASE = "https://api.exchange.coinbase.com"
+
+WINDOW_SECONDS = 900
+SETTLEMENT_AVERAGE_SECONDS = 60  # Kalshi: 60 one-second RTI prices averaged before close
+
+# Assets the desk can model. Kalshi also lists BNB, HYPE, ZEC, TON, NEAR 15-minute
+# series, but Coinbase carries no spot for them, so there is no model input and
+# they are deliberately not here. Add an asset only with a spot source.
+ASSETS = {
+    "BTC": {"kalshi_series": "KXBTC15M", "coinbase": "BTC-USD", "polymarket": "btc"},
+    "ETH": {"kalshi_series": "KXETH15M", "coinbase": "ETH-USD", "polymarket": "eth"},
+    "SOL": {"kalshi_series": "KXSOL15M", "coinbase": "SOL-USD", "polymarket": "sol"},
+    "XRP": {"kalshi_series": "KXXRP15M", "coinbase": "XRP-USD", "polymarket": "xrp"},
+    "DOGE": {"kalshi_series": "KXDOGE15M", "coinbase": "DOGE-USD", "polymarket": "doge"},
+    "ADA": {"kalshi_series": "KXADA15M", "coinbase": "ADA-USD", "polymarket": None},
+    "BCH": {"kalshi_series": "KXBCH15M", "coinbase": "BCH-USD", "polymarket": None},
+}
+
+MODEL_NAME = "driftless_lognormal_v1"
+MODEL_NOTE = (
+    "MODELED, not measured. P(up) = Phi(ln(spot/strike) / (sigma * sqrt(tau_eff))) with "
+    "sigma = realized vol of Coinbase 1-minute log returns over the lookback and tau_eff = "
+    "seconds remaining minus 2/3 of the 60s settlement average. Assumes zero drift, constant "
+    "vol, and that Coinbase spot tracks the CF Benchmarks index. Every one of those is wrong "
+    "sometimes; the band shows how much the number moves if vol is 25% off."
+)
+
+# Defaults. The session playbook (state/pm/playbook/<date>.json) overrides these and
+# is the frozen contract the window loop evaluates against. Changing a default here
+# changes tomorrow; changing the playbook mid-session is a revision with a reason.
+DEFAULT_PLAYBOOK = {
+    "assets": ["BTC", "ETH"],
+    "model": {"name": MODEL_NAME, "vol_lookback_minutes": 120, "vol_band_pct": 25},
+    "fees": {
+        # Robinhood event contracts: flat per-contract commission plus an exchange
+        # fee passed through, charged per trade. Could not be verified from Robinhood's
+        # published schedule at build time — CONFIRM IN THE APP before the first real
+        # trade and revise the playbook if it differs. For a Kalshi-direct account use
+        # {"model": "kalshi_quadratic", "rate": 0.07}: fee = rate * p * (1-p) per contract.
+        "model": "robinhood_flat",
+        "commission_per_contract": 0.01,
+        "exchange_fee_per_contract": 0.01,
+        "verified": False,
+    },
+    "rules": {
+        "min_edge_per_contract": 0.05,
+        "min_seconds_remaining": 180,
+        "max_seconds_remaining": 780,
+        "max_model_confidence": 0.90,
+        "min_ask_size": 20,
+        "blackouts": [],
+    },
+    "capital": {
+        "max_stake_per_window": 50,
+        "max_session_loss": 150,
+        "max_concurrent_open": 2,
+        "paper_stake": 10,
+    },
+    "gate": {
+        "min_settled_for_minimum": 100,
+        "min_settled_for_full": 300,
+        "min_decisions_for_full": 50,
+        "minimum_stake": 10,
+    },
+}
+
+OPTS = {"capture": True, "quiet": False}
+
+
+class PMError(Exception):
+    pass
+
+
+# ----------------------------------------------------------------- utilities
+
+def now_unix() -> int:
+    return int(time.time())
+
+
+def iso(ts: float) -> str:
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_iso(s: str) -> int:
+    return int(datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
+
+
+def today() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def window_start(ts: int) -> int:
+    return ts // WINDOW_SECONDS * WINDOW_SECONDS
+
+
+def fnum(x):
+    if x is None or x == "":
+        return None
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def phi(z: float) -> float:
+    return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+
+
+def eprint(*a):
+    print(*a, file=sys.stderr)
+
+
+def die(msg: str, code: int = 1):
+    eprint(f"pm: {msg}")
+    sys.exit(code)
+
+
+def read_json(path: Path):
+    return json.loads(path.read_text())
+
+
+def write_json(path: Path, obj):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2) + "\n")
+    os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------------- HTTP
+
+def _count_request():
+    day = RAW / today()
+    day.mkdir(parents=True, exist_ok=True)
+    counter = day / ".pm-requests"
+    n = int(counter.read_text().strip() or 0) if counter.exists() else 0
+    counter.write_text(f"{n + 1}\n")
+
+
+def http_get(base: str, path: str, params=None, slug: str = None, retries: int = 2):
+    url = base + path
+    if params:
+        url += "?" + urllib.parse.urlencode(params, doseq=True)
+    req = urllib.request.Request(
+        url, headers={"Accept": "application/json", "User-Agent": "tradingagent-pm/1.0"}
+    )
+    _count_request()
+    body = None
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                body = r.read()
+            break
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 502, 503) and attempt < retries:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise PMError(f"HTTP {e.code} on {url}")
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            if attempt < retries:
+                time.sleep(1.0)
+                continue
+            raise PMError(f"no response from {url}: {e}")
+    if OPTS["capture"] and slug:
+        day = RAW / today()
+        day.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%H%M%S")
+        f = day / f"pm_{slug}-{stamp}.json"
+        f.write_bytes(body)
+        if not OPTS["quiet"]:
+            eprint(f"pm: {url.split('?')[0]} -> {f.relative_to(ROOT)}")
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        raise PMError(f"non-JSON response from {url}")
+
+
+# -------------------------------------------------------------------- Kalshi
+
+def kalshi_market_for_window(asset: str, start: int):
+    """The Kalshi market whose 15-minute window is [start, start+900), or None."""
+    series = ASSETS[asset]["kalshi_series"]
+    end = start + WINDOW_SECONDS
+    data = http_get(
+        KALSHI, "/markets",
+        {"series_ticker": series, "min_close_ts": end - 1, "max_close_ts": end, "limit": 10},
+        slug=f"kalshi_markets_{series}",
+    )
+    for m in data.get("markets", []):
+        if parse_iso(m["close_time"]) == end and parse_iso(m["open_time"]) == start:
+            return m
+    return None
+
+
+def kalshi_market(ticker: str):
+    return http_get(KALSHI, f"/markets/{ticker}", slug=f"kalshi_market_{ticker}").get("market")
+
+
+def kalshi_orderbook(ticker: str, depth: int = 5):
+    data = http_get(KALSHI, f"/markets/{ticker}/orderbook", {"depth": depth},
+                    slug=f"kalshi_book_{ticker}")
+    return data.get("orderbook_fp") or data.get("orderbook") or {}
+
+
+def kalshi_quote(market: dict, book: dict):
+    """Best prices in dollars per $1 contract. Ask on one side is 1 minus the best bid
+    on the other, which is how Kalshi's book is published. Absent stays null."""
+    yes_bids = [(float(p), float(s)) for p, s in book.get("yes_dollars") or []]
+    no_bids = [(float(p), float(s)) for p, s in book.get("no_dollars") or []]
+    best_yes_bid = max(yes_bids) if yes_bids else None
+    best_no_bid = max(no_bids) if no_bids else None
+
+    def px(field):
+        # Kalshi reports "0.0000" on a market with no book (unopened, or one side
+        # empty). A price of zero is not a price; it is absence, and stays null.
+        v = fnum(market.get(field))
+        return v if v is not None and 0 < v < 1 else None
+
+    q = {
+        "yes_bid": best_yes_bid[0] if best_yes_bid else px("yes_bid_dollars"),
+        "yes_ask": round(1 - best_no_bid[0], 4) if best_no_bid else px("yes_ask_dollars"),
+        "no_bid": best_no_bid[0] if best_no_bid else px("no_bid_dollars"),
+        "no_ask": round(1 - best_yes_bid[0], 4) if best_yes_bid else px("no_ask_dollars"),
+        "yes_ask_size": best_no_bid[1] if best_no_bid else None,
+        "no_ask_size": best_yes_bid[1] if best_yes_bid else None,
+        "last": fnum(market.get("last_price_dollars")),
+        "volume": fnum(market.get("volume_fp")),
+        "open_interest": fnum(market.get("open_interest_fp")),
+        "book_at": iso(now_unix()),
+    }
+    if q["yes_bid"] is not None and q["yes_ask"] is not None:
+        q["mid_up"] = round((q["yes_bid"] + q["yes_ask"]) / 2, 4)
+    else:
+        q["mid_up"] = None
+    return q
+
+
+def kalshi_candles(series: str, ticker: str, start: int, end: int):
+    data = http_get(
+        KALSHI, f"/series/{series}/markets/{ticker}/candlesticks",
+        {"start_ts": start, "end_ts": end, "period_interval": 1},
+        slug=f"kalshi_candles_{ticker}",
+    )
+    return data.get("candlesticks", [])
+
+
+def kalshi_settled(series: str, limit: int, min_close_ts: int = None):
+    """Settled markets newest first, paging until `limit` collected."""
+    out, cursor = [], None
+    while len(out) < limit:
+        params = {"series_ticker": series, "status": "settled", "limit": min(200, limit - len(out))}
+        if cursor:
+            params["cursor"] = cursor
+        if min_close_ts:
+            params["min_close_ts"] = min_close_ts
+        data = http_get(KALSHI, "/markets", params, slug=f"kalshi_settled_{series}")
+        ms = data.get("markets", [])
+        out.extend(ms)
+        cursor = data.get("cursor")
+        if not ms or not cursor:
+            break
+        time.sleep(0.15)
+    return out[:limit]
+
+
+# ------------------------------------------------------------------ Coinbase
+
+def coinbase_ticker(product: str):
+    d = http_get(COINBASE, f"/products/{product}/ticker", slug=f"cb_ticker_{product}")
+    return {"price": fnum(d.get("price")), "at": d.get("time"), "bid": fnum(d.get("bid")), "ask": fnum(d.get("ask"))}
+
+
+def coinbase_candles(product: str, start: int, end: int):
+    """1-minute candles covering [start, end], ascending. Coinbase caps a call at 300
+    candles, so the range is chunked. Returns {minute_ts: (low, high, open, close, vol)}."""
+    out = {}
+    cur = start
+    while cur < end:
+        chunk_end = min(cur + 300 * 60, end)
+        d = http_get(
+            COINBASE, f"/products/{product}/candles",
+            {"granularity": 60, "start": iso(cur), "end": iso(chunk_end)},
+            slug=f"cb_candles_{product}",
+        )
+        for row in d:
+            t, lo, hi, op, cl, vol = row[:6]
+            out[int(t)] = (float(lo), float(hi), float(op), float(cl), float(vol))
+        cur = chunk_end
+        if cur < end:
+            time.sleep(0.2)
+    return out
+
+
+def realized_vol(candles: dict, end_ts: int, lookback_minutes: int):
+    """Per-minute sigma of log returns on 1-minute closes in [end - lookback, end).
+    Returns (sigma_per_minute, n_returns). Null when there are too few bars — a
+    quiet minute with no trade is a missing bar, and it stays missing."""
+    minutes = [end_ts - 60 * k for k in range(lookback_minutes, 0, -1)]
+    closes = [candles[m][3] for m in minutes if m in candles]
+    if len(closes) < max(20, lookback_minutes // 2):
+        return None, len(closes)
+    rets = [math.log(b / a) for a, b in zip(closes, closes[1:]) if a > 0 and b > 0]
+    if len(rets) < 20:
+        return None, len(rets)
+    return statistics.stdev(rets), len(rets)
+
+
+# ---------------------------------------------------------------- Polymarket
+
+def polymarket_reference(asset: str, start: int):
+    slug_asset = ASSETS[asset].get("polymarket")
+    if not slug_asset:
+        return None
+    slug = f"{slug_asset}-updown-15m-{start}"
+    try:
+        ev = http_get(GAMMA, "/events", {"slug": slug}, slug=f"poly_{slug}")
+    except PMError as e:
+        return {"slug": slug, "up_price": None, "down_price": None, "error": str(e)}
+    if not ev:
+        return {"slug": slug, "up_price": None, "down_price": None, "error": "no such event"}
+    m = ev[0]["markets"][0]
+    try:
+        prices = json.loads(m.get("outcomePrices") or "[]")
+        up, down = fnum(prices[0]), fnum(prices[1])
+    except (IndexError, json.JSONDecodeError):
+        up = down = None
+    return {
+        "slug": slug,
+        "up_price": up,
+        "down_price": down,
+        "best_bid_up": fnum(m.get("bestBid")),
+        "best_ask_up": fnum(m.get("bestAsk")),
+        "resolution": "Chainlink BTC/USD 60s TWAP — a different index from Kalshi's, so this is an opinion on a correlated question, not the same one.",
+    }
+
+
+# -------------------------------------------------------------------- model
+
+def model_p_up(spot, strike, sigma_min, tau_sec):
+    """Driftless lognormal probability that the settlement average beats the strike."""
+    if not spot or not strike or sigma_min is None or sigma_min <= 0:
+        return None, None, None
+    tau_eff = max(tau_sec - 2 * SETTLEMENT_AVERAGE_SECONDS / 3, 1.0)
+    sigma_sec = sigma_min / math.sqrt(60)
+    z = math.log(spot / strike) / (sigma_sec * math.sqrt(tau_eff))
+    return phi(z), z, tau_eff
+
+
+def fee_per_contract(fees: dict, price: float) -> float:
+    model = fees.get("model", "robinhood_flat")
+    if model == "robinhood_flat":
+        return round(fees.get("commission_per_contract", 0) + fees.get("exchange_fee_per_contract", 0), 4)
+    if model == "kalshi_quadratic":
+        return round(fees.get("rate", 0.07) * price * (1 - price), 4)
+    if model == "none":
+        return 0.0
+    raise PMError(f"unknown fee model {model}")
+
+
+def edge_for(side_p: float, ask: float, fees: dict):
+    """Expected value per $1 contract of buying `side` at `ask`, held to settlement.
+    Cost = ask + entry fee. Win pays 1. Null when there is no ask to buy."""
+    if ask is None or side_p is None:
+        return {"ask": ask, "fee": None, "cost": None, "ev_per_contract": None, "breakeven_p": None, "kelly_fraction": None}
+    fee = fee_per_contract(fees, ask)
+    cost = ask + fee
+    ev = side_p * 1.0 - cost
+    kelly = None
+    if 0 < cost < 1:
+        kelly = side_p - (1 - side_p) * cost / (1 - cost)
+    return {
+        "ask": ask,
+        "fee": fee,
+        "cost": round(cost, 4),
+        "ev_per_contract": round(ev, 4),
+        "breakeven_p": round(cost, 4),
+        "kelly_fraction": round(kelly, 4) if kelly is not None else None,
+    }
+
+
+# ----------------------------------------------------------------- playbook
+
+def playbook_path(date: str = None) -> Path:
+    return STATE / "playbook" / f"{date or today()}.json"
+
+
+def load_playbook():
+    """Today's playbook, or the defaults with playbook_ref = None. Without a playbook
+    the loop may generate paper tickets but never a sized play — the playbook is the
+    frozen contract that sanctions real risk."""
+    p = playbook_path()
+    if p.exists():
+        pb = read_json(p)
+        merged = json.loads(json.dumps(DEFAULT_PLAYBOOK))
+        for k in ("model", "fees", "rules", "capital", "gate"):
+            merged[k].update(pb.get(k, {}))
+        merged["assets"] = pb.get("assets", merged["assets"])
+        return merged, str(p.relative_to(ROOT))
+    return json.loads(json.dumps(DEFAULT_PLAYBOOK)), None
+
+
+def in_blackout(rules: dict, start: int, end: int) -> str:
+    for b in rules.get("blackouts", []):
+        try:
+            b0, b1 = parse_iso(b["from"]), parse_iso(b["to"])
+        except (KeyError, ValueError):
+            continue
+        if start < b1 and end > b0:
+            return b.get("reason", "blackout")
+    return None
+
+
+# -------------------------------------------------------------------- ledger
+
+def ledger_path() -> Path:
+    return STATE / "ledger.jsonl"
+
+
+def read_ledger():
+    p = ledger_path()
+    if not p.exists():
+        return []
+    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+
+
+def append_ledger(entry: dict):
+    p = ledger_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a") as f:
+        f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+
+
+def tickets_dir() -> Path:
+    return STATE / "tickets"
+
+
+def ticket_path(window_id: str) -> Path:
+    return tickets_dir() / f"{window_id}.json"
+
+
+def all_tickets():
+    d = tickets_dir()
+    if not d.exists():
+        return []
+    return [read_json(p) for p in sorted(d.glob("*.json"))]
+
+
+# ------------------------------------------------------------------ gate
+
+def compute_calibration(entries: list, playbook: dict):
+    """Calibration of the model and the market on settled entries, plus the sizing
+    gate. The gate is mechanical: it is what stops the desk sizing up on a model
+    it has not yet shown beats the market it is trading against."""
+    settled = [e for e in entries if e.get("outcome") and e.get("p_model") is not None]
+    y = [1.0 if e["outcome"]["result"] == "up" else 0.0 for e in settled]
+    pm_ = [e["p_model"] for e in settled]
+    mk = [e.get("market_mid_up") for e in settled]
+    both = [(p, m, o) for p, m, o in zip(pm_, mk, y) if m is not None]
+
+    def brier(ps, os_):
+        return round(sum((p - o) ** 2 for p, o in zip(ps, os_)) / len(ps), 4) if ps else None
+
+    def logloss(ps, os_):
+        eps = 1e-6
+        return round(-sum(o * math.log(max(p, eps)) + (1 - o) * math.log(max(1 - p, eps)) for p, o in zip(ps, os_)) / len(ps), 4) if ps else None
+
+    buckets = []
+    for lo in range(0, 10):
+        lo_f, hi_f = lo / 10, (lo + 1) / 10
+        sel = [(p, o) for p, o in zip(pm_, y) if lo_f <= p < hi_f or (hi_f == 1.0 and p == 1.0)]
+        if sel:
+            buckets.append({
+                "bucket": f"{lo_f:.1f}-{hi_f:.1f}",
+                "n": len(sel),
+                "mean_p_model": round(sum(p for p, _ in sel) / len(sel), 3),
+                "observed_up_rate": round(sum(o for _, o in sel) / len(sel), 3),
+            })
+
+    decisions = [e for e in settled if e.get("decision", {}).get("status") in ("play", "paper") and e.get("pnl_paper_per_contract") is not None]
+    dec_pnl = [e["pnl_paper_per_contract"] for e in decisions]
+    dec_hits = [1 for e in decisions if e["pnl_paper_per_contract"] > 0]
+    real = [e for e in settled if e.get("pnl_real") is not None]
+
+    n = len(settled)
+    brier_model = brier(pm_, y)
+    brier_market = brier([m for _, m, _ in both], [o for _, _, o in both])
+    brier_model_on_both = brier([p for p, _, _ in both], [o for _, _, o in both])
+    model_beats_market = (
+        brier_model_on_both is not None and brier_market is not None and brier_model_on_both < brier_market
+    )
+    g = playbook["gate"]
+    if n < g["min_settled_for_minimum"]:
+        gate, why = "paper", f"{n} settled windows; need {g['min_settled_for_minimum']} before any real size"
+    elif not model_beats_market:
+        gate, why = "paper", f"model Brier {brier_model_on_both} is not better than market Brier {brier_market} — no measured edge, no real size"
+    elif n < g["min_settled_for_full"] or len(decisions) < g["min_decisions_for_full"] or (dec_pnl and sum(dec_pnl) <= 0):
+        gate, why = "minimum", f"model beats market on {len(both)} windows but {len(decisions)} decisions with mean paper P/L {round(sum(dec_pnl)/len(dec_pnl),4) if dec_pnl else None}/contract — minimum stake only"
+    else:
+        gate, why = "full", f"model beats market over {len(both)} windows and {len(decisions)} decisions are net positive on paper"
+
+    return {
+        "schema_version": "1.0",
+        "computed_at": iso(now_unix()),
+        "n_settled": n,
+        "n_with_market_quote": len(both),
+        "brier_model": brier_model,
+        "brier_market": brier_market,
+        "brier_model_on_quoted": brier_model_on_both,
+        "logloss_model": logloss(pm_, y),
+        "base_rate_up": round(sum(y) / n, 3) if n else None,
+        "reliability": buckets,
+        "decisions": {
+            "n": len(decisions),
+            "hit_rate": round(len(dec_hits) / len(decisions), 3) if decisions else None,
+            "mean_pnl_per_contract": round(sum(dec_pnl) / len(dec_pnl), 4) if dec_pnl else None,
+            "total_pnl_per_contract": round(sum(dec_pnl), 4) if dec_pnl else None,
+            "mean_predicted_ev": round(sum(e["decision"].get("ev_per_contract") or 0 for e in decisions) / len(decisions), 4) if decisions else None,
+        },
+        "real": {
+            "n": len(real),
+            "total_pnl": round(sum(e["pnl_real"] for e in real), 2) if real else None,
+        },
+        "gate": {"stage": gate, "reason": why},
+        "note": "Brier: mean squared error of a probability, lower is better; 0.25 is a coin flip. The market Brier uses the Kalshi mid at decision time. The model only earns real size when it is measurably better than the thing it is betting against.",
+    }
+
+
+def gate_stage(playbook: dict):
+    p = STATE / "calibration.json"
+    if p.exists():
+        return read_json(p).get("gate", {}).get("stage", "paper")
+    return "paper"
+
+
+# ------------------------------------------------------------------- ticket
+
+def build_ticket(asset: str, start: int, playbook: dict, playbook_ref: str, at: int = None):
+    asset = asset.upper()
+    if asset not in ASSETS:
+        raise PMError(f"unsupported asset {asset}; supported: {', '.join(ASSETS)}")
+    at = at or now_unix()
+    end = start + WINDOW_SECONDS
+    remaining = end - at
+    gaps = []
+    window_id = f"{asset}-{start}"
+
+    market = kalshi_market_for_window(asset, start)
+    if market is None:
+        raise PMError(f"no Kalshi market found for {asset} window {iso(start)}-{iso(end)}")
+    ticker = market["ticker"]
+    strike = fnum(market.get("floor_strike"))
+    if strike is None:
+        gaps.append("Kalshi has not published the strike for this window yet (it appears at the open).")
+
+    quote = None
+    try:
+        book = kalshi_orderbook(ticker)
+        quote = kalshi_quote(market, book)
+    except PMError as e:
+        gaps.append(f"order book unavailable: {e}")
+        quote = kalshi_quote(market, {})
+    if quote["yes_ask"] is None or quote["no_ask"] is None:
+        gaps.append("no two-sided quote on Kalshi — edge cannot be evaluated")
+
+    cb = ASSETS[asset]["coinbase"]
+    spot = None
+    try:
+        spot = coinbase_ticker(cb)
+    except PMError as e:
+        gaps.append(f"Coinbase spot unavailable: {e}")
+    lookback = playbook["model"]["vol_lookback_minutes"]
+    sigma_min, n_rets = None, 0
+    try:
+        candles = coinbase_candles(cb, at // 60 * 60 - lookback * 60, at // 60 * 60)
+        sigma_min, n_rets = realized_vol(candles, at // 60 * 60, lookback)
+        if sigma_min is None:
+            gaps.append(f"only {n_rets} usable 1-minute bars in the {lookback}-minute lookback — vol not estimated")
+    except PMError as e:
+        gaps.append(f"Coinbase candles unavailable: {e}")
+
+    p_up, z, tau_eff = model_p_up(spot["price"] if spot else None, strike, sigma_min, remaining)
+    band = None
+    if p_up is not None:
+        k = playbook["model"]["vol_band_pct"] / 100
+        hi_vol, _, _ = model_p_up(spot["price"], strike, sigma_min * (1 + k), remaining)
+        lo_vol, _, _ = model_p_up(spot["price"], strike, sigma_min * (1 - k), remaining)
+        band = sorted([round(hi_vol, 4), round(lo_vol, 4)])
+
+    fees = playbook["fees"]
+    edge_up = edge_for(p_up, quote["yes_ask"], fees)
+    edge_down = edge_for((1 - p_up) if p_up is not None else None, quote["no_ask"], fees)
+
+    xref = None
+    try:
+        xref = polymarket_reference(asset, start)
+    except Exception as e:  # cross-reference is never allowed to break a ticket
+        xref = {"error": str(e)}
+
+    decision = decide(playbook, playbook_ref, remaining, start, end, quote, p_up, edge_up, edge_down, strike, spot, sigma_min)
+
+    ticket = {
+        "schema_version": "1.0",
+        "window_id": window_id,
+        "asset": asset,
+        "venue": "robinhood",
+        "exchange": "kalshi",
+        "market_ticker": ticker,
+        "market_title": market.get("title"),
+        "window": {"start": iso(start), "end": iso(end), "start_unix": start, "end_unix": end},
+        "decided_at": iso(at),
+        "seconds_remaining": remaining,
+        "playbook_ref": playbook_ref,
+        "strike": {
+            "value": strike,
+            "source": "kalshi:floor_strike",
+            "note": "60-second average of the CF Benchmarks real-time index before the window opened. Published by the exchange; this is the actual number the contract settles against.",
+        },
+        "spot": {
+            "price": spot["price"] if spot else None,
+            "at": spot["at"] if spot else None,
+            "source": f"coinbase:{cb}",
+            "note": "Coinbase spot is a proxy for the CF Benchmarks index. Basis between them is usually a few dollars on BTC and is a real error term near the strike.",
+        },
+        "vol": {
+            "sigma_per_minute": round(sigma_min, 7) if sigma_min else None,
+            "annualized_pct": round(sigma_min * math.sqrt(525600) * 100, 1) if sigma_min else None,
+            "lookback_minutes": lookback,
+            "n_returns": n_rets,
+            "source": f"coinbase 1-minute closes ({cb})",
+        },
+        "model": {
+            "name": MODEL_NAME,
+            "p_up": round(p_up, 4) if p_up is not None else None,
+            "p_up_band_vol_pm25pct": band,
+            "z": round(z, 4) if z is not None else None,
+            "tau_effective_seconds": round(tau_eff, 1) if tau_eff else None,
+            "note": MODEL_NOTE,
+        },
+        "market": quote,
+        "cross_reference": {"polymarket": xref} if xref else None,
+        "fees": fees,
+        "edge": {"up": edge_up, "down": edge_down},
+        "decision": decision,
+        "gaps": gaps,
+        "execution": None,
+        "outcome": None,
+    }
+    return ticket
+
+
+def open_exposure(playbook):
+    """Stake at risk in tickets with a recorded fill and no outcome yet, and today's
+    realized real P/L from the ledger. Both are what the capital rules bind on."""
+    open_stake, n_open = 0.0, 0
+    for t in all_tickets():
+        if t.get("execution") and not t.get("outcome"):
+            open_stake += t["execution"].get("stake", 0) or 0
+            n_open += 1
+    realized = sum(
+        e["pnl_real"] for e in read_ledger()
+        if e.get("pnl_real") is not None and e.get("window_start", "").startswith(today())
+    )
+    return open_stake, n_open, realized
+
+
+def decide(playbook, playbook_ref, remaining, start, end, quote, p_up, edge_up, edge_down, strike, spot, sigma_min):
+    rules, cap = playbook["rules"], playbook["capital"]
+    stage = gate_stage(playbook)
+    base = {
+        "status": None, "side": None, "limit_price": None, "contracts": None, "stake": None,
+        "max_loss": None, "ev_per_contract": None, "kelly_quarter_fraction": None,
+        "gate": stage, "reason": None,
+    }
+
+    def out(status, reason, **kw):
+        d = dict(base)
+        d.update(status=status, reason=reason, **kw)
+        return d
+
+    why = in_blackout(rules, start, end)
+    if why:
+        return out("blackout", f"window overlaps a playbook blackout: {why}")
+    if remaining < rules["min_seconds_remaining"]:
+        return out("too_late", f"{remaining}s remaining < {rules['min_seconds_remaining']}s minimum — the last minutes are a coin toss on the settlement average, not a model")
+    if remaining > rules["max_seconds_remaining"]:
+        return out("too_early", f"{remaining}s remaining > {rules['max_seconds_remaining']}s — strike or quote not yet meaningful")
+    if strike is None or spot is None or spot.get("price") is None or sigma_min is None or p_up is None:
+        return out("no_model", "could not evaluate: missing strike, spot or vol — this is a gap, not a pass")
+    if quote["yes_ask"] is None or quote["no_ask"] is None:
+        return out("no_quote", "could not evaluate: no two-sided Kalshi quote — this is a gap, not a pass")
+
+    cands = [("up", p_up, edge_up, quote["yes_ask_size"]), ("down", 1 - p_up, edge_down, quote["no_ask_size"])]
+    side, side_p, edge, size = max(cands, key=lambda c: c[2]["ev_per_contract"] if c[2]["ev_per_contract"] is not None else -9)
+    ev = edge["ev_per_contract"]
+    if ev is None or ev < rules["min_edge_per_contract"]:
+        return out("pass", f"best edge {ev} < {rules['min_edge_per_contract']} minimum after fees (up ev {edge_up['ev_per_contract']}, down ev {edge_down['ev_per_contract']})",
+                   side=side, ev_per_contract=ev)
+    if side_p > rules["max_model_confidence"]:
+        return out("pass", f"model p({side}) {round(side_p,3)} above {rules['max_model_confidence']} — tail edge is model error, not opportunity", side=side, ev_per_contract=ev)
+
+    kelly_q = round(edge["kelly_fraction"] / 4, 4) if edge["kelly_fraction"] else None
+    cost = edge["cost"]
+
+    # real size is sanctioned only by a playbook AND a gate that has earned it
+    if playbook_ref is None:
+        stake, status, note = cap["paper_stake"], "paper", "no playbook for today — paper only (run /pm-open)"
+    elif stage == "paper":
+        stake, status, note = cap["paper_stake"], "paper", "calibration gate is 'paper' — logged, not sized"
+    elif stage == "minimum":
+        stake, status, note = min(playbook["gate"]["minimum_stake"], cap["max_stake_per_window"]), "play", "gate 'minimum'"
+    else:
+        stake, status, note = cap["max_stake_per_window"], "play", "gate 'full'"
+
+    if status == "play":
+        open_stake, n_open, realized = open_exposure(playbook)
+        if n_open >= cap["max_concurrent_open"]:
+            return out("at_capacity", f"{n_open} open windows already at max_concurrent_open {cap['max_concurrent_open']}", side=side, ev_per_contract=ev)
+        if -realized + open_stake + stake > cap["max_session_loss"]:
+            return out("halted", f"session loss limit: realized {round(realized,2)}, open stake {round(open_stake,2)}, this stake {stake} would exceed max_session_loss {cap['max_session_loss']}", side=side, ev_per_contract=ev)
+
+    contracts = int(stake // cost) if cost and cost > 0 else 0
+    if contracts < 1:
+        return out("pass", f"stake {stake} buys fewer than one contract at cost {cost}", side=side, ev_per_contract=ev)
+    if size is not None and size < rules["min_ask_size"]:
+        note += f"; only {size} contracts shown at the ask (min {rules['min_ask_size']}) — expect to pay up or get partial"
+    if size is not None and contracts > size:
+        contracts = int(size)
+        note += f"; cut to {contracts} contracts, the displayed size at the ask"
+    return out(
+        status, note, side=side, limit_price=edge["ask"], contracts=contracts,
+        stake=round(contracts * cost, 2), max_loss=round(contracts * cost, 2),
+        ev_per_contract=ev, kelly_quarter_fraction=kelly_q,
+    )
+
+
+# ------------------------------------------------------------------- settle
+
+def pnl_per_contract(side: str, price: float, fee: float, result: str):
+    if side is None or price is None or result not in ("up", "down"):
+        return None
+    win = (side == result)
+    return round((1 - price - fee) if win else -(price + fee), 4)
+
+
+def settle_ticket(t: dict):
+    m = kalshi_market(t["market_ticker"])
+    result = (m.get("result") or "").lower()
+    if result not in ("yes", "no"):
+        return None
+    res = "up" if result == "yes" else "down"
+    fees = t.get("fees", DEFAULT_PLAYBOOK["fees"])
+    d = t["decision"]
+    outcome = {
+        "result": res,
+        "settlement_value": fnum(m.get("expiration_value")),
+        "strike": t["strike"]["value"],
+        "kalshi_status": m.get("status"),
+        "settled_at": iso(now_unix()),
+    }
+    paper_pc = None
+    if d.get("status") in ("play", "paper") and d.get("limit_price") is not None:
+        paper_pc = pnl_per_contract(d["side"], d["limit_price"], fee_per_contract(fees, d["limit_price"]), res)
+    real = None
+    ex = t.get("execution")
+    if ex:
+        pc = pnl_per_contract(ex["side"], ex["price"], fee_per_contract(fees, ex["price"]), res)
+        real = round(pc * ex["contracts"], 2) if pc is not None else None
+    p = t["model"]["p_up"]
+    mid = t["market"].get("mid_up")
+    y = 1.0 if res == "up" else 0.0
+    entry = {
+        "schema_version": "1.0",
+        "window_id": t["window_id"],
+        "ticket_ref": str(ticket_path(t["window_id"]).relative_to(ROOT)),
+        "asset": t["asset"],
+        "market_ticker": t["market_ticker"],
+        "window_start": t["window"]["start"],
+        "window_end": t["window"]["end"],
+        "decided_at": t["decided_at"],
+        "seconds_remaining": t["seconds_remaining"],
+        "strike": t["strike"]["value"],
+        "spot": t["spot"]["price"],
+        "sigma_per_minute": t["vol"]["sigma_per_minute"],
+        "p_model": p,
+        "market_mid_up": mid,
+        "market_yes_ask": t["market"].get("yes_ask"),
+        "market_no_ask": t["market"].get("no_ask"),
+        "decision": {k: d.get(k) for k in ("status", "side", "limit_price", "contracts", "stake", "ev_per_contract", "gate")},
+        "execution": {k: ex.get(k) for k in ("side", "price", "contracts", "stake", "at")} if ex else None,
+        "outcome": outcome,
+        "pnl_paper_per_contract": paper_pc,
+        "pnl_paper": round(paper_pc * d["contracts"], 2) if paper_pc is not None and d.get("contracts") else None,
+        "pnl_real": real,
+        "brier_model": round((p - y) ** 2, 4) if p is not None else None,
+        "brier_market": round((mid - y) ** 2, 4) if mid is not None else None,
+    }
+    return outcome, entry
+
+
+# -------------------------------------------------------------------- replay
+
+def replay(asset: str, n_windows: int, at_minutes: list, playbook: dict):
+    """Grade the model against the market on settled Kalshi windows.
+
+    What this can tell you: whether the model's probabilities are calibrated, and
+    whether they are closer to the truth than the market's own price at the same
+    moment. What it cannot tell you: that you would have been filled at the shown
+    ask, or that the next 200 windows look like the last 200. Coinbase 1-minute
+    opens stand in for the index; that basis is inside every number here."""
+    asset = asset.upper()
+    cfg = ASSETS[asset]
+    series = cfg["kalshi_series"]
+    lookback = playbook["model"]["vol_lookback_minutes"]
+    fees, rules = playbook["fees"], playbook["rules"]
+
+    eprint(f"pm: fetching {n_windows} settled {series} windows")
+    markets = [m for m in kalshi_settled(series, n_windows) if m.get("result") in ("yes", "no") and fnum(m.get("floor_strike"))]
+    if not markets:
+        raise PMError("no settled windows returned")
+    starts = [parse_iso(m["open_time"]) for m in markets]
+    ends = [parse_iso(m["close_time"]) for m in markets]
+    eprint(f"pm: fetching Coinbase 1m candles {iso(min(starts) - lookback*60)} .. {iso(max(ends))}")
+    candles = coinbase_candles(cfg["coinbase"], min(starts) - lookback * 60, max(ends) + 60)
+
+    rows, skipped = [], {"no_spot": 0, "no_vol": 0, "no_market_quote": 0}
+    for i, m in enumerate(markets):
+        start, end = parse_iso(m["open_time"]), parse_iso(m["close_time"])
+        strike = float(m["floor_strike"])
+        res = "up" if m["result"] == "yes" else "down"
+        y = 1.0 if res == "up" else 0.0
+        try:
+            kc = kalshi_candles(series, m["ticker"], start, end)
+        except PMError:
+            kc = []
+        by_end = {int(c["end_period_ts"]): c for c in kc}
+        for mm in at_minutes:
+            t = start + 60 * mm
+            c = candles.get(t)
+            if not c:
+                skipped["no_spot"] += 1
+                continue
+            spot = c[2]  # open of the minute bar at t
+            sigma, _ = realized_vol(candles, t, lookback)
+            if sigma is None:
+                skipped["no_vol"] += 1
+                continue
+            p, _, _ = model_p_up(spot, strike, sigma, end - t)
+            kcand = by_end.get(t + 60)
+            ya = fnum(((kcand or {}).get("yes_ask") or {}).get("open_dollars"))
+            yb = fnum(((kcand or {}).get("yes_bid") or {}).get("open_dollars"))
+            if ya is None or yb is None:
+                skipped["no_market_quote"] += 1
+                mid = na = None
+            else:
+                mid = (ya + yb) / 2
+                na = round(1 - yb, 4)
+            eu = edge_for(p, ya, fees)
+            ed = edge_for(1 - p, na, fees)
+            side, sp, e = max([("up", p, eu), ("down", 1 - p, ed)], key=lambda c: c[2]["ev_per_contract"] if c[2]["ev_per_contract"] is not None else -9)
+            take = (
+                e["ev_per_contract"] is not None
+                and e["ev_per_contract"] >= rules["min_edge_per_contract"]
+                and sp <= rules["max_model_confidence"]
+            )
+            pnl = pnl_per_contract(side, e["ask"], e["fee"], res) if take else None
+            rows.append({
+                "ticker": m["ticker"], "minute": mm, "p_model": p, "mid": mid, "y": y,
+                "take": take, "side": side if take else None, "ev": e["ev_per_contract"] if take else None, "pnl": pnl,
+            })
+        if i % 25 == 0 and not OPTS["quiet"]:
+            eprint(f"pm: {i+1}/{len(markets)} windows")
+        time.sleep(0.12)
+
+    def brier(sel, key):
+        v = [(r[key], r["y"]) for r in sel if r[key] is not None]
+        return (round(sum((p - o) ** 2 for p, o in v) / len(v), 4), len(v)) if v else (None, 0)
+
+    report = {"asset": asset, "series": series, "n_windows": len(markets), "at_minutes": at_minutes,
+              "first_window": iso(min(starts)), "last_window": iso(max(ends)),
+              "playbook_rules": rules, "fees": fees, "skipped": skipped, "by_minute": [], "overall": {}}
+    for mm in at_minutes:
+        sel = [r for r in rows if r["minute"] == mm]
+        quoted = [r for r in sel if r["mid"] is not None]
+        bm, n1 = brier(quoted, "p_model")
+        bk, _ = brier(quoted, "mid")
+        takes = [r for r in sel if r["take"]]
+        pnls = [r["pnl"] for r in takes]
+        report["by_minute"].append({
+            "minute": mm, "n": len(sel), "n_quoted": len(quoted),
+            "brier_model": bm, "brier_market": bk,
+            "model_beats_market": (bm is not None and bk is not None and bm < bk),
+            "trades": len(takes),
+            "hit_rate": round(sum(1 for x in pnls if x > 0) / len(pnls), 3) if pnls else None,
+            "mean_pnl_per_contract": round(sum(pnls) / len(pnls), 4) if pnls else None,
+            "mean_predicted_ev": round(sum(r["ev"] for r in takes) / len(takes), 4) if takes else None,
+            "total_pnl_per_contract": round(sum(pnls), 4) if pnls else None,
+        })
+    quoted = [r for r in rows if r["mid"] is not None]
+    bm, _ = brier(quoted, "p_model")
+    bk, _ = brier(quoted, "mid")
+    takes = [r for r in rows if r["take"]]
+    pnls = [r["pnl"] for r in takes]
+    buckets = []
+    for lo in range(0, 10):
+        lo_f, hi_f = lo / 10, (lo + 1) / 10
+        sel = [r for r in rows if lo_f <= r["p_model"] < hi_f or (hi_f == 1.0 and r["p_model"] == 1.0)]
+        if sel:
+            buckets.append({"bucket": f"{lo_f:.1f}-{hi_f:.1f}", "n": len(sel),
+                            "mean_p_model": round(sum(r["p_model"] for r in sel) / len(sel), 3),
+                            "observed_up_rate": round(sum(r["y"] for r in sel) / len(sel), 3)})
+    report["overall"] = {
+        "n_evaluations": len(rows), "n_quoted": len(quoted), "brier_model": bm, "brier_market": bk,
+        "model_beats_market": (bm is not None and bk is not None and bm < bk),
+        "base_rate_up": round(sum(r["y"] for r in rows) / len(rows), 3) if rows else None,
+        "trades": len(takes),
+        "hit_rate": round(sum(1 for x in pnls if x > 0) / len(pnls), 3) if pnls else None,
+        "mean_pnl_per_contract": round(sum(pnls) / len(pnls), 4) if pnls else None,
+        "total_pnl_per_contract": round(sum(pnls), 4) if pnls else None,
+        "reliability": buckets,
+    }
+    report["caveats"] = [
+        "Fills assumed at the displayed Kalshi ask at the top of the minute; real fills are worse, never better.",
+        "Coinbase 1-minute bar opens stand in for the CF Benchmarks index; the basis is inside every probability here.",
+        "The market quote is the open of the Kalshi 1-minute candle, which can be stale in thin windows.",
+        "Fees use the playbook fee model, which is unverified until confirmed in the Robinhood app.",
+        "Past windows say nothing about regime change. Re-run weekly and compare, do not extrapolate.",
+    ]
+    return report
+
+
+# -------------------------------------------------------------------- output
+
+def print_windows_table(rows):
+    hdr = f"{'asset':<5} {'window (UTC)':<13} {'ticker':<26} {'strike':>11} {'spot':>11} {'rem':>5} {'yes b/a':>11} {'p_up':>6} {'poly up':>8}"
+    print(hdr)
+    print("-" * len(hdr))
+    for r in rows:
+        ba = f"{r['yes_bid'] if r['yes_bid'] is not None else '-'}/{r['yes_ask'] if r['yes_ask'] is not None else '-'}"
+        print(f"{r['asset']:<5} {r['window']:<13} {r['ticker'] or '-':<26} {fmt(r['strike'], 2):>11} {fmt(r['spot'], 2):>11} {r['remaining']:>5} {ba:>11} {fmt(r['p_up'], 3):>6} {fmt(r['poly_up'], 3):>8}")
+
+
+def fmt(x, nd):
+    return "-" if x is None else f"{x:.{nd}f}"
+
+
+# --------------------------------------------------------------- subcommands
+
+def cmd_windows(args):
+    playbook, _ = load_playbook()
+    assets = [a.upper() for a in (arg_value(args, "--assets") or ",".join(playbook["assets"])).split(",")]
+    at = now_unix()
+    cur = window_start(at)
+    rows = []
+    for asset in assets:
+        cb = ASSETS[asset]["coinbase"]
+        spot = None
+        sigma = None
+        try:
+            spot = coinbase_ticker(cb)["price"]
+            candles = coinbase_candles(cb, at // 60 * 60 - playbook["model"]["vol_lookback_minutes"] * 60, at // 60 * 60)
+            sigma, _ = realized_vol(candles, at // 60 * 60, playbook["model"]["vol_lookback_minutes"])
+        except PMError as e:
+            eprint(f"pm: {asset} spot/vol unavailable: {e}")
+        for start in (cur, cur + WINDOW_SECONDS):
+            m = None
+            try:
+                m = kalshi_market_for_window(asset, start)
+            except PMError as e:
+                eprint(f"pm: {asset} {iso(start)}: {e}")
+            strike = fnum(m.get("floor_strike")) if m else None
+            q = kalshi_quote(m, {}) if m else {"yes_bid": None, "yes_ask": None}
+            p, _, _ = model_p_up(spot, strike, sigma, start + WINDOW_SECONDS - at) if strike else (None, None, None)
+            poly = None
+            try:
+                x = polymarket_reference(asset, start)
+                poly = x["up_price"] if x else None
+            except Exception:
+                poly = None
+            rows.append({
+                "asset": asset, "window": f"{iso(start)[11:16]}-{iso(start+WINDOW_SECONDS)[11:16]}",
+                "ticker": m["ticker"] if m else None, "strike": strike, "spot": spot,
+                "remaining": start + WINDOW_SECONDS - at, "yes_bid": q["yes_bid"], "yes_ask": q["yes_ask"],
+                "p_up": p, "poly_up": poly,
+            })
+    print_windows_table(rows)
+
+
+def cmd_quote(args):
+    if not args:
+        die("usage: pm quote <kalshi-ticker>")
+    m = kalshi_market(args[0])
+    if not m:
+        die(f"no such market {args[0]}")
+    book = kalshi_orderbook(args[0])
+    out = {
+        "ticker": m["ticker"], "title": m.get("title"), "status": m.get("status"),
+        "open_time": m.get("open_time"), "close_time": m.get("close_time"),
+        "seconds_remaining": parse_iso(m["close_time"]) - now_unix(),
+        "strike": fnum(m.get("floor_strike")), "result": m.get("result") or None,
+        "settlement_value": fnum(m.get("expiration_value")),
+        "quote": kalshi_quote(m, book), "book": book,
+    }
+    print(json.dumps(out, indent=2))
+
+
+def cmd_spot(args):
+    if not args:
+        die("usage: pm spot <ASSET>")
+    asset = args[0].upper()
+    if asset not in ASSETS:
+        die(f"unsupported asset {asset}")
+    playbook, _ = load_playbook()
+    lb = playbook["model"]["vol_lookback_minutes"]
+    at = now_unix()
+    cb = ASSETS[asset]["coinbase"]
+    t = coinbase_ticker(cb)
+    candles = coinbase_candles(cb, at // 60 * 60 - lb * 60, at // 60 * 60)
+    sigma, n = realized_vol(candles, at // 60 * 60, lb)
+    print(json.dumps({
+        "asset": asset, "source": cb, "price": t["price"], "at": t["at"],
+        "sigma_per_minute": sigma, "annualized_pct": round(sigma * math.sqrt(525600) * 100, 1) if sigma else None,
+        "lookback_minutes": lb, "n_returns": n,
+        "one_sigma_move_15m": round(t["price"] * sigma * math.sqrt(15), 2) if sigma and t["price"] else None,
+    }, indent=2))
+
+
+def cmd_ticket(args):
+    if not args:
+        die("usage: pm ticket <ASSET> [--window now|next]")
+    asset = args[0].upper()
+    which = arg_value(args, "--window") or "now"
+    at = now_unix()
+    start = window_start(at) + (WINDOW_SECONDS if which == "next" else 0)
+    window_id = f"{asset}-{start}"
+    path = ticket_path(window_id)
+    if path.exists():
+        # Frozen means frozen. There is no override flag on purpose: a second look
+        # at a window reads the ticket the desk already wrote.
+        die(f"ticket {path.relative_to(ROOT)} already exists — tickets are frozen at decision time. Read it; do not regenerate it.", 3)
+    playbook, ref = load_playbook()
+    t = build_ticket(asset, start, playbook, ref, at)
+    write_json(path, t)
+    if not OPTS["quiet"]:
+        d = t["decision"]
+        eprint(f"pm: wrote {path.relative_to(ROOT)}  decision={d['status']} side={d['side']} p_up={t['model']['p_up']} ask={d['limit_price']} x{d['contracts']}")
+    print(json.dumps(t, indent=2))
+
+
+def cmd_record(args):
+    if not args:
+        die("usage: pm record <window_id> --side up|down --price P --contracts N [--at ISO] [--replace]")
+    window_id = args[0]
+    path = ticket_path(window_id)
+    if not path.exists():
+        die(f"no ticket {window_id}")
+    t = read_json(path)
+    side = (arg_value(args, "--side") or "").lower()
+    price = fnum(arg_value(args, "--price"))
+    contracts = arg_value(args, "--contracts")
+    if side not in ("up", "down") or price is None or not contracts:
+        die("need --side up|down --price P --contracts N")
+    contracts = int(contracts)
+    if t.get("execution") and "--replace" not in args:
+        die("execution already recorded; pass --replace to supersede (the old record is kept in execution_history)", 3)
+    fee = fee_per_contract(t.get("fees", DEFAULT_PLAYBOOK["fees"]), price)
+    ex = {
+        "side": side, "price": price, "contracts": contracts, "fee_per_contract": fee,
+        "stake": round(contracts * (price + fee), 2),
+        "at": arg_value(args, "--at") or iso(now_unix()),
+        "against_desk": t["decision"]["status"] not in ("play",) or t["decision"]["side"] != side,
+        "note": arg_value(args, "--note"),
+    }
+    if t.get("execution"):
+        t.setdefault("execution_history", []).append(t["execution"])
+    t["execution"] = ex
+    write_json(path, t)
+    print(json.dumps(ex, indent=2))
+
+
+def cmd_settle(args):
+    at = now_unix()
+    settled, pending, errors = [], [], []
+    for t in all_tickets():
+        if t.get("outcome"):
+            continue
+        if t["window"]["end_unix"] + 20 > at:
+            continue
+        try:
+            r = settle_ticket(t)
+        except PMError as e:
+            errors.append({"window_id": t["window_id"], "error": str(e)})
+            continue
+        if r is None:
+            pending.append(t["window_id"])
+            continue
+        outcome, entry = r
+        t["outcome"] = outcome
+        write_json(ticket_path(t["window_id"]), t)
+        append_ledger(entry)
+        settled.append({k: entry[k] for k in ("window_id", "p_model", "market_mid_up", "outcome", "pnl_paper", "pnl_real")} | {"decision": entry["decision"]["status"], "side": entry["decision"]["side"]})
+        time.sleep(0.1)
+    # refresh the derived calibration file so the next ticket sees the current gate
+    playbook, _ = load_playbook()
+    cal = compute_calibration(read_ledger(), playbook)
+    write_json(STATE / "calibration.json", cal)
+    print(json.dumps({"settled": settled, "pending_result": pending, "errors": errors, "gate": cal["gate"]}, indent=2))
+
+
+def cmd_calibrate(args):
+    playbook, _ = load_playbook()
+    cal = compute_calibration(read_ledger(), playbook)
+    write_json(STATE / "calibration.json", cal)
+    if "--json" in args:
+        print(json.dumps(cal, indent=2))
+        return
+    print(f"settled windows: {cal['n_settled']}  (with market quote: {cal['n_with_market_quote']})")
+    print(f"Brier  model {cal['brier_model_on_quoted']}   market {cal['brier_market']}   (0.25 = coin flip; lower is better)")
+    print(f"log-loss model {cal['logloss_model']}   base rate up {cal['base_rate_up']}")
+    print()
+    if cal["reliability"]:
+        print(f"{'p_model bucket':<16}{'n':>6}{'mean p':>10}{'observed':>10}")
+        for b in cal["reliability"]:
+            print(f"{b['bucket']:<16}{b['n']:>6}{b['mean_p_model']:>10}{b['observed_up_rate']:>10}")
+        print()
+    d = cal["decisions"]
+    print(f"decisions (play+paper): {d['n']}  hit rate {d['hit_rate']}  mean P/L per contract {d['mean_pnl_per_contract']}  predicted EV {d['mean_predicted_ev']}")
+    print(f"real: {cal['real']['n']} fills, total P/L {cal['real']['total_pnl']}")
+    print()
+    print(f"GATE: {cal['gate']['stage'].upper()} — {cal['gate']['reason']}")
+
+
+def cmd_replay(args):
+    if not args:
+        die("usage: pm replay <ASSET> [--windows 200] [--at-minutes 3,7,11]")
+    asset = args[0].upper()
+    if asset not in ASSETS:
+        die(f"unsupported asset {asset}")
+    n = int(arg_value(args, "--windows") or 200)
+    mins = [int(x) for x in (arg_value(args, "--at-minutes") or "3,7,11").split(",")]
+    playbook, _ = load_playbook()
+    rep = replay(asset, n, mins, playbook)
+    out = STATE / "replay" / f"{asset}-{today()}.json"
+    write_json(out, rep)
+    if "--json" in args:
+        print(json.dumps(rep, indent=2))
+        return
+    o = rep["overall"]
+    print(f"{asset} — {rep['n_windows']} settled windows, {rep['first_window']} .. {rep['last_window']}")
+    print(f"skipped: {rep['skipped']}")
+    print()
+    print(f"{'min':>4}{'n':>6}{'quoted':>8}{'brier mdl':>11}{'brier mkt':>11}{'beats?':>8}{'trades':>8}{'hit':>7}{'pnl/ct':>9}{'pred ev':>9}")
+    for b in rep["by_minute"]:
+        print(f"{b['minute']:>4}{b['n']:>6}{b['n_quoted']:>8}{fmt(b['brier_model'],4):>11}{fmt(b['brier_market'],4):>11}{str(b['model_beats_market']):>8}{b['trades']:>8}{fmt(b['hit_rate'],3):>7}{fmt(b['mean_pnl_per_contract'],4):>9}{fmt(b['mean_predicted_ev'],4):>9}")
+    print()
+    print(f"overall: Brier model {o['brier_model']} vs market {o['brier_market']}  model beats market: {o['model_beats_market']}")
+    print(f"strategy at playbook rules: {o['trades']} trades, hit rate {o['hit_rate']}, mean P/L per contract {o['mean_pnl_per_contract']}, total {o['total_pnl_per_contract']}")
+    print()
+    if o["reliability"]:
+        print(f"{'p_model bucket':<16}{'n':>6}{'mean p':>10}{'observed':>10}")
+        for b in o["reliability"]:
+            print(f"{b['bucket']:<16}{b['n']:>6}{b['mean_p_model']:>10}{b['observed_up_rate']:>10}")
+    print()
+    for c in rep["caveats"]:
+        print(f"! {c}")
+    eprint(f"pm: wrote {out.relative_to(ROOT)}")
+
+
+def cmd_playbook(args):
+    if not args or args[0] != "init":
+        die("usage: pm playbook init [--date YYYY-MM-DD] [--assets BTC,ETH] [--max-stake N] [--force]")
+    date = arg_value(args, "--date") or today()
+    path = playbook_path(date)
+    if path.exists() and "--force" not in args:
+        die(f"{path.relative_to(ROOT)} exists — the playbook is frozen for the session; append to revisions instead", 3)
+    pb = json.loads(json.dumps(DEFAULT_PLAYBOOK))
+    if arg_value(args, "--assets"):
+        pb["assets"] = [a.upper() for a in arg_value(args, "--assets").split(",")]
+    if arg_value(args, "--max-stake"):
+        pb["capital"]["max_stake_per_window"] = float(arg_value(args, "--max-stake"))
+    cal = read_json(STATE / "calibration.json") if (STATE / "calibration.json").exists() else None
+    doc = {
+        "schema_version": "1.0",
+        "session_date": date,
+        "generated_at": iso(now_unix()),
+        "frozen": True,
+        "revisions": [],
+        "venue": "robinhood",
+        "exchange": "kalshi",
+        "gate_at_open": cal["gate"] if cal else {"stage": "paper", "reason": "no calibration file yet"},
+        **pb,
+        "notes": None,
+    }
+    write_json(path, doc)
+    print(json.dumps(doc, indent=2))
+    eprint(f"pm: wrote {path.relative_to(ROOT)} — validate it, add blackouts, commit it")
+
+
+def cmd_budget(args):
+    counter = RAW / today() / ".pm-requests"
+    n = int(counter.read_text().strip() or 0) if counter.exists() else 0
+    print(f"pm requests logged on {today()}: {n}")
+
+
+def arg_value(args, flag):
+    if flag in args:
+        i = args.index(flag)
+        if i + 1 < len(args):
+            return args[i + 1]
+    return None
+
+
+COMMANDS = {
+    "windows": cmd_windows, "quote": cmd_quote, "spot": cmd_spot, "ticket": cmd_ticket,
+    "record": cmd_record, "settle": cmd_settle, "calibrate": cmd_calibrate, "replay": cmd_replay,
+    "playbook": cmd_playbook, "budget": cmd_budget,
+}
+
+
+def main(argv):
+    args = argv[1:]
+    while args and args[0].startswith("--"):
+        f = args.pop(0)
+        if f == "--no-capture":
+            OPTS["capture"] = False
+        elif f == "--quiet":
+            OPTS["quiet"] = True
+        else:
+            die(f"unknown flag {f}")
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 2
+    sub, rest = args[0], args[1:]
+    if sub not in COMMANDS:
+        die(f"unknown subcommand {sub}; expected one of {', '.join(COMMANDS)}")
+    try:
+        COMMANDS[sub](rest)
+    except PMError as e:
+        die(str(e))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

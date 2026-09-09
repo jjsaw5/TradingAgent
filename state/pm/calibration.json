@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "computed_at": "2026-09-09T00:03:02Z",
+  "n_settled": 1,
+  "n_with_market_quote": 1,
+  "brier_model": 0.6247,
+  "brier_market": 0.7656,
+  "brier_model_on_quoted": 0.6247,
+  "logloss_model": 1.5626,
+  "base_rate_up": 1.0,
+  "reliability": [
+    {
+      "bucket": "0.2-0.3",
+      "n": 1,
+      "mean_p_model": 0.21,
+      "observed_up_rate": 1.0
+    }
+  ],
+  "decisions": {
+    "n": 0,
+    "hit_rate": null,
+    "mean_pnl_per_contract": null,
+    "total_pnl_per_contract": null,
+    "mean_predicted_ev": null
+  },
+  "real": {
+    "n": 0,
+    "total_pnl": null
+  },
+  "gate": {
+    "stage": "paper",
+    "reason": "1 settled windows; need 100 before any real size"
+  },
+  "note": "Brier: mean squared error of a probability, lower is better; 0.25 is a coin flip. The market Brier uses the Kalshi mid at decision time. The model only earns real size when it is measurably better than the thing it is betting against."
+}

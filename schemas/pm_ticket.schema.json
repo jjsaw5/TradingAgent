@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://market-desk/schemas/pm_ticket.schema.json",
+  "title": "Prediction-Market Window Ticket",
+  "description": "One decision record per asset per 15-minute window. Written once by bin/pm at decision time and frozen: everything the desk knew, the model's number, the market's number, the fee, the edge and the mechanical decision. Two fields are appended later and never rewritten — execution (the fill the client reports) and outcome (how the window settled). A ticket is written for every evaluated window, including passes, because calibration measured only on the windows you liked is not calibration.",
+  "type": "object",
+  "required": ["schema_version", "window_id", "asset", "venue", "exchange", "market_ticker", "window", "decided_at", "seconds_remaining", "playbook_ref", "strike", "spot", "vol", "model", "market", "fees", "edge", "decision", "gaps", "execution", "outcome"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "window_id": { "type": "string", "pattern": "^[A-Z]{2,5}-\\d{10}$", "description": "ASSET-<window start unix>. Stable, so it is the join key across tickets, ledger and git history." },
+    "asset": { "type": "string" },
+    "venue": { "const": "robinhood" },
+    "exchange": { "const": "kalshi" },
+    "market_ticker": { "type": "string", "description": "The Kalshi ticker, which is also what the Robinhood contract is." },
+    "market_title": { "type": ["string", "null"] },
+    "window": {
+      "type": "object",
+      "required": ["start", "end", "start_unix", "end_unix"],
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" },
+        "start_unix": { "type": "integer" },
+        "end_unix": { "type": "integer" }
+      }
+    },
+    "decided_at": { "type": "string", "format": "date-time" },
+    "seconds_remaining": { "type": "integer" },
+    "playbook_ref": { "type": ["string", "null"], "description": "Null means no playbook existed — the ticket can be paper only." },
+    "strike": {
+      "type": "object",
+      "required": ["value", "source"],
+      "properties": {
+        "value": { "type": ["number", "null"] },
+        "source": { "const": "kalshi:floor_strike" },
+        "note": { "type": "string" }
+      }
+    },
+    "spot": {
+      "type": "object",
+      "required": ["price", "source"],
+      "properties": {
+        "price": { "type": ["number", "null"] },
+        "at": { "type": ["string", "null"] },
+        "source": { "type": "string" },
+        "note": { "type": "string" }
+      }
+    },
+    "vol": {
+      "type": "object",
+      "required": ["sigma_per_minute", "lookback_minutes", "n_returns"],
+      "properties": {
+        "sigma_per_minute": { "type": ["number", "null"] },
+        "annualized_pct": { "type": ["number", "null"] },
+        "lookback_minutes": { "type": "integer" },
+        "n_returns": { "type": "integer" },
+        "source": { "type": "string" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["name", "p_up", "note"],
+      "properties": {
+        "name": { "type": "string" },
+        "p_up": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "MODELED. Null when any input was missing — never a default." },
+        "p_up_band_vol_pm25pct": { "type": ["array", "null"], "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+        "z": { "type": ["number", "null"] },
+        "tau_effective_seconds": { "type": ["number", "null"] },
+        "note": { "type": "string", "description": "Says the number is modeled and what it assumes. Travels with the number." }
+      }
+    },
+    "market": {
+      "type": "object",
+      "required": ["yes_bid", "yes_ask", "no_bid", "no_ask", "mid_up"],
+      "properties": {
+        "yes_bid": { "type": ["number", "null"] },
+        "yes_ask": { "type": ["number", "null"] },
+        "no_bid": { "type": ["number", "null"] },
+        "no_ask": { "type": ["number", "null"] },
+        "yes_ask_size": { "type": ["number", "null"] },
+        "no_ask_size": { "type": ["number", "null"] },
+        "mid_up": { "type": ["number", "null"] },
+        "last": { "type": ["number", "null"] },
+        "volume": { "type": ["number", "null"] },
+        "open_interest": { "type": ["number", "null"] },
+        "book_at": { "type": ["string", "null"] }
+      }
+    },
+    "cross_reference": {
+      "type": ["object", "null"],
+      "description": "Another market's opinion on a correlated question. Context, never a venue.",
+      "properties": {
+        "polymarket": {
+          "type": ["object", "null"],
+          "properties": {
+            "slug": { "type": "string" },
+            "up_price": { "type": ["number", "null"] },
+            "down_price": { "type": ["number", "null"] },
+            "best_bid_up": { "type": ["number", "null"] },
+            "best_ask_up": { "type": ["number", "null"] },
+            "resolution": { "type": "string" },
+            "error": { "type": "string" }
+          }
+        }
+      }
+    },
+    "fees": { "type": "object" },
+    "edge": {
+      "type": "object",
+      "required": ["up", "down"],
+      "properties": {
+        "up": { "$ref": "#/$defs/edge" },
+        "down": { "$ref": "#/$defs/edge" }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "required": ["status", "side", "limit_price", "contracts", "stake", "reason", "gate"],
+      "properties": {
+        "status": {
+          "enum": ["play", "paper", "pass", "blackout", "too_late", "too_early", "no_model", "no_quote", "at_capacity", "halted"],
+          "description": "play: sized, sanctioned by playbook and gate. paper: edge seen but not sanctioned — logged. pass: no edge. no_model / no_quote: COULD NOT EVALUATE, which is a different fact from pass."
+        },
+        "side": { "enum": ["up", "down", null] },
+        "limit_price": { "type": ["number", "null"] },
+        "contracts": { "type": ["integer", "null"] },
+        "stake": { "type": ["number", "null"] },
+        "max_loss": { "type": ["number", "null"] },
+        "ev_per_contract": { "type": ["number", "null"] },
+        "kelly_quarter_fraction": { "type": ["number", "null"], "description": "Informational. Sizing is the fixed stake from the playbook; Kelly on an unvalidated model is a way to lose money quickly." },
+        "gate": { "enum": ["paper", "minimum", "full"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "gaps": { "type": "array", "items": { "type": "string" } },
+    "execution": {
+      "type": ["object", "null"],
+      "description": "The fill the client reports. Recorded by hand via `pm record` because Robinhood's event-contract positions are not readable by the desk.",
+      "required": ["side", "price", "contracts", "stake", "at"],
+      "properties": {
+        "side": { "enum": ["up", "down"] },
+        "price": { "type": "number" },
+        "contracts": { "type": "integer", "minimum": 1 },
+        "fee_per_contract": { "type": "number" },
+        "stake": { "type": "number" },
+        "at": { "type": "string" },
+        "against_desk": { "type": "boolean", "description": "True when the client traded a window the desk did not call a play, or the other side. Their capital, their call — recorded so the two track records stay separate." },
+        "note": { "type": ["string", "null"] }
+      }
+    },
+    "execution_history": { "type": "array", "items": { "type": "object" } },
+    "outcome": {
+      "type": ["object", "null"],
+      "required": ["result", "settlement_value", "settled_at"],
+      "properties": {
+        "result": { "enum": ["up", "down"] },
+        "settlement_value": { "type": ["number", "null"] },
+        "strike": { "type": ["number", "null"] },
+        "kalshi_status": { "type": ["string", "null"] },
+        "settled_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "$defs": {
+    "edge": {
+      "type": "object",
+      "required": ["ask", "fee", "cost", "ev_per_contract", "breakeven_p"],
+      "properties": {
+        "ask": { "type": ["number", "null"] },
+        "fee": { "type": ["number", "null"] },
+        "cost": { "type": ["number", "null"] },
+        "ev_per_contract": { "type": ["number", "null"], "description": "p_model(side) minus cost. Positive is the model disagreeing with the market by more than the fee. That is a hypothesis, not money." },
+        "breakeven_p": { "type": ["number", "null"] },
+        "kelly_fraction": { "type": ["number", "null"] }
+      }
+    }
+  }
+}

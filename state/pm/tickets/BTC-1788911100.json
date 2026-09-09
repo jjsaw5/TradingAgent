@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.0",
+  "window_id": "BTC-1788911100",
+  "asset": "BTC",
+  "venue": "robinhood",
+  "exchange": "kalshi",
+  "market_ticker": "KXBTC15M-26SEP082000-00",
+  "market_title": "BTC price up in next 15 mins?",
+  "window": {
+    "start": "2026-09-08T23:45:00Z",
+    "end": "2026-09-09T00:00:00Z",
+    "start_unix": 1788911100,
+    "end_unix": 1788912000
+  },
+  "decided_at": "2026-09-08T23:57:47Z",
+  "seconds_remaining": 133,
+  "playbook_ref": null,
+  "strike": {
+    "value": 78442.97,
+    "source": "kalshi:floor_strike",
+    "note": "60-second average of the CF Benchmarks real-time index before the window opened. Published by the exchange; this is the actual number the contract settles against."
+  },
+  "spot": {
+    "price": 78422.55,
+    "at": "2026-09-08T23:57:46.950957612Z",
+    "source": "coinbase:BTC-USD",
+    "note": "Coinbase spot is a proxy for the CF Benchmarks index. Basis between them is usually a few dollars on BTC and is a real error term near the strike."
+  },
+  "vol": {
+    "sigma_per_minute": 0.0002589,
+    "annualized_pct": 18.8,
+    "lookback_minutes": 120,
+    "n_returns": 119,
+    "source": "coinbase 1-minute closes (BTC-USD)"
+  },
+  "model": {
+    "name": "driftless_lognormal_v1",
+    "p_up": 0.2096,
+    "p_up_band_vol_pm25pct": [
+      0.1407,
+      0.2591
+    ],
+    "z": -0.8078,
+    "tau_effective_seconds": 93.0,
+    "note": "MODELED, not measured. P(up) = Phi(ln(spot/strike) / (sigma * sqrt(tau_eff))) with sigma = realized vol of Coinbase 1-minute log returns over the lookback and tau_eff = seconds remaining minus 2/3 of the 60s settlement average. Assumes zero drift, constant vol, and that Coinbase spot tracks the CF Benchmarks index. Every one of those is wrong sometimes; the band shows how much the number moves if vol is 25% off."
+  },
+  "market": {
+    "yes_bid": 0.12,
+    "yes_ask": 0.13,
+    "no_bid": 0.87,
+    "no_ask": 0.88,
+    "yes_ask_size": 5456.01,
+    "no_ask_size": 311.02,
+    "last": 0.15,
+    "volume": 1634197.66,
+    "open_interest": 350471.98,
+    "book_at": "2026-09-08T23:57:47Z",
+    "mid_up": 0.125
+  },
+  "cross_reference": {
+    "polymarket": {
+      "slug": "btc-updown-15m-1788911100",
+      "up_price": 0.125,
+      "down_price": 0.875,
+      "best_bid_up": 0.14,
+      "best_ask_up": 0.15,
+      "resolution": "Chainlink BTC/USD 60s TWAP \u2014 a different index from Kalshi's, so this is an opinion on a correlated question, not the same one."
+    }
+  },
+  "fees": {
+    "model": "robinhood_flat",
+    "commission_per_contract": 0.01,
+    "exchange_fee_per_contract": 0.01,
+    "verified": false
+  },
+  "edge": {
+    "up": {
+      "ask": 0.13,
+      "fee": 0.02,
+      "cost": 0.15,
+      "ev_per_contract": 0.0596,
+      "breakeven_p": 0.15,
+      "kelly_fraction": 0.0701
+    },
+    "down": {
+      "ask": 0.88,
+      "fee": 0.02,
+      "cost": 0.9,
+      "ev_per_contract": -0.1096,
+      "breakeven_p": 0.9,
+      "kelly_fraction": -1.0961
+    }
+  },
+  "decision": {
+    "status": "too_late",
+    "side": null,
+    "limit_price": null,
+    "contracts": null,
+    "stake": null,
+    "max_loss": null,
+    "ev_per_contract": null,
+    "kelly_quarter_fraction": null,
+    "gate": "paper",
+    "reason": "133s remaining < 180s minimum \u2014 the last minutes are a coin toss on the settlement average, not a model"
+  },
+  "gaps": [],
+  "execution": null,
+  "outcome": {
+    "result": "up",
+    "settlement_value": 78446.77,
+    "strike": 78442.97,
+    "kalshi_status": "finalized",
+    "settled_at": "2026-09-09T00:03:02Z"
+  }
+}

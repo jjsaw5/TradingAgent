@@ -50,6 +50,25 @@ triggers the monitor *could not check*. A trigger that failed to evaluate and a
 trigger that did not fire are different facts, and conflating them is how a desk
 reassures a client while blind.
 
+## The prediction-market desk
+
+A second desk, same rules, for the 15-minute crypto up/down contracts on
+Robinhood. Robinhood routes those to Kalshi, so every contract has a published
+strike, settlement and result the desk can read without credentials.
+
+```
+/pm-open                  # freeze the session playbook: assets, rules, fees, stake, blackouts
+/loop 5m /pm-window       # one frozen ticket per asset per window; a play is a message, a pass is silence
+/pm-review                # settle, grade, recompute the calibration gate
+bin/pm replay BTC         # grade the model against 400 already-settled windows, no capital needed
+```
+
+Every ticket carries a modeled probability, labeled as such, and every ticket
+settles into an append-only ledger. A calibration gate keeps real stake at zero
+until the model has measurably beaten the market it is betting against. Fills
+happen by hand in Robinhood and are recorded as reported. `docs/PREDICTION_MARKETS.md`
+says where an edge could and could not come from; read it first.
+
 ## Quick start
 
 ```bash
@@ -78,13 +97,15 @@ wrong. Then see `docs/RUNBOOK.md`.
 
 ```
 .claude/agents/     market-brief · flow-analyst · position-monitor
-.claude/skills/     open-desk · desk-monitor · close-desk
+.claude/skills/     open-desk · desk-monitor · close-desk · pm-open · pm-window · pm-review
 schemas/            the artifact contracts — read these first
-examples/           a fully worked watchlist, for reference
+examples/           a fully worked watchlist, playbook and ticket, for reference
 bin/uw              UW REST wrapper; captures raw responses for replay
+bin/pm              prediction-market tool: Kalshi data, pricer, tickets, ledger, replay
 bin/validate        schema check; agents run it before writing any artifact
-state/              briefs · flow · watchlist · alerts · positions · raw
-docs/               ARCHITECTURE · UW_ENDPOINTS · RUNBOOK
+tests/              offline tests for the pricer and the decision rules
+state/              briefs · flow · watchlist · alerts · positions · pm · raw
+docs/               ARCHITECTURE · UW_ENDPOINTS · RUNBOOK · PREDICTION_MARKETS
 CLAUDE.md           the desk's operating rules and risk envelope
 ```
 

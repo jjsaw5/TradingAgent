@@ -120,6 +120,89 @@ sample size, three simultaneous filter changes teach you nothing about any of th
 
 ---
 
+## The prediction-market desk
+
+### Setup
+
+Nothing to configure. Kalshi, Coinbase and Polymarket market data are public;
+`bin/pm` holds no credentials and has no order code.
+
+```bash
+python3 -m unittest tests/test_pm.py        # pricer and decision rules, offline
+bin/pm windows --assets BTC,ETH             # venues reachable, strikes publishing
+bin/pm replay BTC --windows 400             # ~3 minutes; grades the model on settled windows
+```
+
+Run the replay before the first session and read the reliability table. It tells
+you where the model is off before any money is near it.
+
+**Confirm the fee in the Robinhood app** and set it in the playbook. The default
+(one cent commission plus one cent exchange fee per contract) is unverified, and
+every edge number depends on it.
+
+### Dry run, in this order
+
+```
+/pm-open              # confirm playbook written, validated, committed
+/pm-window            # confirm a ticket is written and settle runs clean
+bin/pm record ...     # record a pretend fill, then check the ticket
+/pm-review            # confirm the ledger appends and the gate recomputes
+```
+
+The gate starts at `paper` and stays there for at least 100 settled windows —
+about a day of two assets. Run paper for that long even if you are impatient;
+the ledger is the only thing that will ever tell you whether this works.
+
+### Cadence
+
+Fifteen-minute windows need a look every five minutes. **Routines cannot do
+that** (one-hour minimum), so this desk runs as a live loop in a session you
+keep open:
+
+```
+/loop 5m /pm-window
+```
+
+Each window is seen about three times and gets one ticket, on the first look that
+falls inside the playbook's time band (default 3 to 13 minutes remaining). When
+the session ends the loop ends, and the desk says so. There is no unattended
+mode by design — see `docs/PREDICTION_MARKETS.md` §8 for what would justify one.
+
+`/pm-window` also settles closed windows, so a session that starts after a gap
+first catches the ledger up.
+
+### Daily operation
+
+**Open.** `/pm-open`. Read the gate stage and the fee line in the briefing.
+
+**Intraday.** A `play` is a message with contract, side, limit, count and max
+loss. Place it in Robinhood and tell the desk the fill — it cannot see your
+event-contract positions. Silence means passes and paper calls are being logged.
+"Blind on ETH" means two cycles of `no_quote`/`no_model`; the desk is not
+evaluating that asset.
+
+**Close.** `/pm-review`. Weekly, re-run the replay per asset and compare.
+
+### Troubleshooting
+
+**`ticket ... already exists`** — normal. One ticket per window per asset,
+frozen. Read it.
+
+**Every ticket is `too_early` or `too_late`** — the loop cadence and the time band
+are misaligned. Widen the band in tomorrow's playbook by one minute, not five.
+
+**`no_quote` all session on one asset** — thin market. Drop the asset in tomorrow's
+playbook; do not widen `min_ask_size` to make it trade.
+
+**Gate stuck at `paper` with hundreds of windows** — the model is not beating the
+market. That is the finding. The correct response is a replay by minute and a
+smaller question, not a bigger model.
+
+**`pending_result` an hour after the close** — Kalshi has not finalized, or the
+settle call is failing (`errors` will say). Leave it; never fill in a result.
+
+---
+
 ## Troubleshooting
 
 **`bin/uw: UW_API_TOKEN is not set`** — `.env` missing or not readable. It is

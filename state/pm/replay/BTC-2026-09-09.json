@@ -1,0 +1,153 @@
+{
+  "asset": "BTC",
+  "series": "KXBTC15M",
+  "n_windows": 400,
+  "at_minutes": [
+    3,
+    7,
+    11
+  ],
+  "first_window": "2026-09-04T19:45:00Z",
+  "last_window": "2026-09-08T23:45:00Z",
+  "playbook_rules": {
+    "min_edge_per_contract": 0.05,
+    "min_seconds_remaining": 180,
+    "max_seconds_remaining": 780,
+    "max_model_confidence": 0.9,
+    "min_ask_size": 20,
+    "blackouts": []
+  },
+  "fees": {
+    "model": "robinhood_flat",
+    "commission_per_contract": 0.01,
+    "exchange_fee_per_contract": 0.01,
+    "verified": false
+  },
+  "skipped": {
+    "no_spot": 0,
+    "no_vol": 0,
+    "no_market_quote": 0
+  },
+  "by_minute": [
+    {
+      "minute": 3,
+      "n": 400,
+      "n_quoted": 400,
+      "brier_model": 0.2166,
+      "brier_market": 0.2185,
+      "model_beats_market": true,
+      "trades": 64,
+      "hit_rate": 0.719,
+      "mean_pnl_per_contract": 0.1248,
+      "mean_predicted_ev": 0.0865,
+      "total_pnl_per_contract": 7.99
+    },
+    {
+      "minute": 7,
+      "n": 400,
+      "n_quoted": 400,
+      "brier_model": 0.1651,
+      "brier_market": 0.1665,
+      "model_beats_market": true,
+      "trades": 82,
+      "hit_rate": 0.512,
+      "mean_pnl_per_contract": -0.002,
+      "mean_predicted_ev": 0.0899,
+      "total_pnl_per_contract": -0.16
+    },
+    {
+      "minute": 11,
+      "n": 400,
+      "n_quoted": 400,
+      "brier_model": 0.1236,
+      "brier_market": 0.1254,
+      "model_beats_market": true,
+      "trades": 88,
+      "hit_rate": 0.443,
+      "mean_pnl_per_contract": 0.0761,
+      "mean_predicted_ev": 0.0997,
+      "total_pnl_per_contract": 6.699
+    }
+  ],
+  "overall": {
+    "n_evaluations": 1200,
+    "n_quoted": 1200,
+    "brier_model": 0.1684,
+    "brier_market": 0.1701,
+    "model_beats_market": true,
+    "base_rate_up": 0.463,
+    "trades": 234,
+    "hit_rate": 0.543,
+    "mean_pnl_per_contract": 0.0621,
+    "total_pnl_per_contract": 14.529,
+    "reliability": [
+      {
+        "bucket": "0.0-0.1",
+        "n": 147,
+        "mean_p_model": 0.041,
+        "observed_up_rate": 0.061
+      },
+      {
+        "bucket": "0.1-0.2",
+        "n": 84,
+        "mean_p_model": 0.151,
+        "observed_up_rate": 0.155
+      },
+      {
+        "bucket": "0.2-0.3",
+        "n": 108,
+        "mean_p_model": 0.253,
+        "observed_up_rate": 0.157
+      },
+      {
+        "bucket": "0.3-0.4",
+        "n": 153,
+        "mean_p_model": 0.352,
+        "observed_up_rate": 0.327
+      },
+      {
+        "bucket": "0.4-0.5",
+        "n": 181,
+        "mean_p_model": 0.45,
+        "observed_up_rate": 0.436
+      },
+      {
+        "bucket": "0.5-0.6",
+        "n": 157,
+        "mean_p_model": 0.545,
+        "observed_up_rate": 0.554
+      },
+      {
+        "bucket": "0.6-0.7",
+        "n": 110,
+        "mean_p_model": 0.652,
+        "observed_up_rate": 0.627
+      },
+      {
+        "bucket": "0.7-0.8",
+        "n": 95,
+        "mean_p_model": 0.746,
+        "observed_up_rate": 0.789
+      },
+      {
+        "bucket": "0.8-0.9",
+        "n": 61,
+        "mean_p_model": 0.85,
+        "observed_up_rate": 0.951
+      },
+      {
+        "bucket": "0.9-1.0",
+        "n": 104,
+        "mean_p_model": 0.969,
+        "observed_up_rate": 0.942
+      }
+    ]
+  },
+  "caveats": [
+    "Fills assumed at the displayed Kalshi ask at the top of the minute; real fills are worse, never better.",
+    "Coinbase 1-minute bar opens stand in for the CF Benchmarks index; the basis is inside every probability here.",
+    "The market quote is the open of the Kalshi 1-minute candle, which can be stale in thin windows.",
+    "Fees use the playbook fee model, which is unverified until confirmed in the Robinhood app.",
+    "Past windows say nothing about regime change. Re-run weekly and compare, do not extrapolate."
+  ]
+}

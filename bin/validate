@@ -7,12 +7,18 @@ validate is not a contract, and the monitor depends on it being one.
 
 Usage:
     bin/validate state/watchlist/2026-08-14.json
-    bin/validate --all                    # every artifact in state/ + examples/
+    bin/validate state/pm/ledger.jsonl        # every line checked
+    bin/validate --all                        # every artifact in state/ + examples/
     bin/validate --schema watchlist path/to/file.json
 
 Schema is inferred from the path when not given explicitly:
-    state/watchlist/*  -> watchlist          state/alerts/*   -> alert_state
-    state/briefs/*     -> market_brief       state/flow/*     -> flow_candidates
+    state/watchlist/*      -> watchlist          state/alerts/*        -> alert_state
+    state/briefs/*         -> market_brief       state/flow/*          -> flow_candidates
+    state/pm/playbook/*    -> pm_playbook        state/pm/tickets/*    -> pm_ticket
+    state/pm/ledger.jsonl  -> pm_ledger_entry (one object per line)
+
+Derived files with no contract (state/pm/calibration.json, state/pm/replay/*)
+are skipped, not failed.
 """
 
 import json
@@ -27,39 +33,77 @@ except ImportError:
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_DIR = ROOT / "schemas"
 
-INFER = {
+# directory name -> schema
+INFER_PARTS = {
     "watchlist": "watchlist",
     "alerts": "alert_state",
     "briefs": "market_brief",
     "flow": "flow_candidates",
+    "playbook": "pm_playbook",
+    "tickets": "pm_ticket",
+}
+# file stem -> schema (examples/, ledgers)
+INFER_STEMS = {
+    "ledger": "pm_ledger_entry",
+    "pm_ledger": "pm_ledger_entry",
+    "pm_ticket": "pm_ticket",
+    "pm_playbook": "pm_playbook",
+    "watchlist": "watchlist",
+    "alert_state": "alert_state",
+    "market_brief": "market_brief",
+    "flow_candidates": "flow_candidates",
 }
 
 
 def infer_schema(path: Path) -> str | None:
-    for part in path.parts:
-        if part in INFER:
-            return INFER[part]
-    for key in INFER.values():
-        if path.stem.startswith(key) or key in path.stem:
-            return key
+    for part in path.parts[:-1]:
+        if part in INFER_PARTS:
+            return INFER_PARTS[part]
+    # longest stem prefix wins so pm_ledger beats ledger and pm_ticket is unambiguous
+    for key in sorted(INFER_STEMS, key=len, reverse=True):
+        if path.stem.startswith(key):
+            return INFER_STEMS[key]
     return None
 
 
-def validate(path: Path, schema_name: str) -> list[str]:
+def load_validator(schema_name: str):
     schema_path = SCHEMA_DIR / f"{schema_name}.schema.json"
     if not schema_path.exists():
-        return [f"no such schema: {schema_path.name}"]
+        return None
+    return Draft202012Validator(json.loads(schema_path.read_text()))
+
+
+def errors_for(validator, instance, prefix: str = "") -> list[str]:
+    errs = sorted(validator.iter_errors(instance), key=lambda e: list(e.path))
+    return [
+        f"{prefix}{'/'.join(str(p) for p in e.path) or '<root>'}: {e.message}" for e in errs
+    ]
+
+
+def validate(path: Path, schema_name: str) -> list[str]:
+    validator = load_validator(schema_name)
+    if validator is None:
+        return [f"no such schema: {schema_name}.schema.json"]
+
+    text = path.read_text()
+    if path.suffix == ".jsonl":
+        out = []
+        for i, line in enumerate(text.splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as exc:
+                out.append(f"line {i}: not valid JSON: {exc}")
+                continue
+            out.extend(errors_for(validator, obj, prefix=f"line {i}: "))
+        return out
 
     try:
-        instance = json.loads(path.read_text())
+        instance = json.loads(text)
     except json.JSONDecodeError as exc:
         return [f"not valid JSON: {exc}"]
-
-    validator = Draft202012Validator(json.loads(schema_path.read_text()))
-    errors = sorted(validator.iter_errors(instance), key=lambda e: list(e.path))
-    return [
-        f"{'/'.join(str(p) for p in e.path) or '<root>'}: {e.message}" for e in errors
-    ]
+    return errors_for(validator, instance)
 
 
 def main(argv: list[str]) -> int:
@@ -73,7 +117,8 @@ def main(argv: list[str]) -> int:
         targets = [
             p
             for d in ("state", "examples")
-            for p in (ROOT / d).rglob("*.json")
+            for pattern in ("*.json", "*.jsonl")
+            for p in (ROOT / d).rglob(pattern)
             if "raw" not in p.parts
         ]
     else:
@@ -84,7 +129,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     failed = 0
-    for path in targets:
+    for path in sorted(targets):
         if not path.exists():
             print(f"MISSING  {path}")
             failed += 1
@@ -92,7 +137,7 @@ def main(argv: list[str]) -> int:
 
         schema_name = schema_override or infer_schema(path)
         if schema_name is None:
-            print(f"SKIP     {path}  (cannot infer schema; pass --schema)")
+            print(f"SKIP     {path}  (no schema for this file)")
             continue
 
         errors = validate(path, schema_name)

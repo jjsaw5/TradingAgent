@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://market-desk/schemas/pm_playbook.schema.json",
+  "title": "Prediction-Market Session Playbook",
+  "description": "The frozen contract for one session of 15-minute prediction-market windows. Written by the desk at /pm-open and evaluated mechanically by bin/pm on every window. It is the analogue of the options watchlist: the rules are decided once, calmly, and the loop applies them. It cannot be relaxed intraday except by an appended revision with a reason.",
+  "type": "object",
+  "required": ["schema_version", "session_date", "generated_at", "frozen", "venue", "exchange", "assets", "model", "fees", "rules", "capital", "gate", "gate_at_open"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "session_date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "frozen": { "type": "boolean" },
+    "revisions": {
+      "type": "array",
+      "description": "Append-only. Any intraday change lands here with a reason; the original value is never overwritten.",
+      "items": {
+        "type": "object",
+        "required": ["at", "field", "from", "to", "reason"],
+        "properties": {
+          "at": { "type": "string", "format": "date-time" },
+          "field": { "type": "string" },
+          "from": {},
+          "to": {},
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "venue": { "const": "robinhood", "description": "Where the client executes. Robinhood event contracts route to Kalshi." },
+    "exchange": { "const": "kalshi" },
+    "gate_at_open": {
+      "type": "object",
+      "description": "The calibration gate as it stood when the playbook was written. Recorded so the session's sizing can be audited against what the desk knew.",
+      "required": ["stage", "reason"],
+      "properties": {
+        "stage": { "enum": ["paper", "minimum", "full"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 4,
+      "items": { "enum": ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "BCH"] },
+      "description": "Assets in play this session. Capped: each one is a ticket every 15 minutes and the client's attention does not scale. Empty is a legitimate session."
+    },
+    "model": {
+      "type": "object",
+      "required": ["name", "vol_lookback_minutes"],
+      "properties": {
+        "name": { "const": "driftless_lognormal_v1" },
+        "vol_lookback_minutes": { "type": "integer", "minimum": 30, "maximum": 1440 },
+        "vol_band_pct": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "fees": {
+      "type": "object",
+      "required": ["model", "verified"],
+      "properties": {
+        "model": { "enum": ["robinhood_flat", "kalshi_quadratic", "none"] },
+        "commission_per_contract": { "type": "number", "minimum": 0 },
+        "exchange_fee_per_contract": { "type": "number", "minimum": 0 },
+        "rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "verified": { "type": "boolean", "description": "False until the client has confirmed the fee schedule in the app. Every edge number is only as good as this." }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "description": "Mechanical entry rules. bin/pm applies these; the desk does not reinterpret them window by window.",
+      "required": ["min_edge_per_contract", "min_seconds_remaining", "max_seconds_remaining", "max_model_confidence"],
+      "properties": {
+        "min_edge_per_contract": { "type": "number", "minimum": 0, "maximum": 1, "description": "Model probability minus cost (ask + fee) must clear this, in dollars per $1 contract." },
+        "min_seconds_remaining": { "type": "integer", "minimum": 0, "maximum": 900 },
+        "max_seconds_remaining": { "type": "integer", "minimum": 0, "maximum": 900 },
+        "max_model_confidence": { "type": "number", "minimum": 0.5, "maximum": 1, "description": "Above this the apparent edge is tail model error, not opportunity. Pass." },
+        "min_ask_size": { "type": "number", "minimum": 0 },
+        "blackouts": {
+          "type": "array",
+          "description": "Windows the desk will not trade: scheduled prints, known events, anything that breaks the zero-drift assumption.",
+          "items": {
+            "type": "object",
+            "required": ["from", "to", "reason"],
+            "properties": {
+              "from": { "type": "string", "format": "date-time" },
+              "to": { "type": "string", "format": "date-time" },
+              "reason": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "capital": {
+      "type": "object",
+      "required": ["max_stake_per_window", "max_session_loss", "max_concurrent_open", "paper_stake"],
+      "properties": {
+        "max_stake_per_window": { "type": "number", "exclusiveMinimum": 0, "description": "On a binary the stake IS the max loss." },
+        "max_session_loss": { "type": "number", "exclusiveMinimum": 0, "description": "Realized losses plus open stake may not exceed this. The desk halts, it does not chase." },
+        "max_concurrent_open": { "type": "integer", "minimum": 1 },
+        "paper_stake": { "type": "number", "exclusiveMinimum": 0, "description": "Notional used to size paper decisions so their P/L is comparable across windows." }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "description": "Thresholds for the calibration gate. Real size is earned by measured performance, not granted by conviction.",
+      "required": ["min_settled_for_minimum", "min_settled_for_full", "min_decisions_for_full", "minimum_stake"],
+      "properties": {
+        "min_settled_for_minimum": { "type": "integer", "minimum": 1 },
+        "min_settled_for_full": { "type": "integer", "minimum": 1 },
+        "min_decisions_for_full": { "type": "integer", "minimum": 1 },
+        "minimum_stake": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "notes": { "type": ["string", "null"], "maxLength": 1000 }
+  }
+}
