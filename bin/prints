@@ -20,7 +20,7 @@ Subcommands
   prints nowcast <PRINT>                   the model's distribution and its inputs
   prints ladder <EVENT_TICKER>             one event's strike ladder with model p per strike
   prints ticket <PRINT> [--event T]        frozen decision ticket for the nearest event
-  prints record <ticket_id> --side yes|no --price P --contracts N [--replace]
+  prints record <ticket_id> --side yes|no --price P --contracts N [--paper] [--replace]
   prints settle                            settle released events -> ledger, refresh gate
   prints calibrate                         calibration and gate from the live ledger
   prints replay <PRINT> [--periods N]      model-only calibration on FRED history
@@ -802,14 +802,20 @@ def settle_ticket(t):
     paper_pc = None
     if d.get("status") in ("play", "paper") and d.get("limit_price") is not None and chosen_y:
         paper_pc = _pnl(d["side"], d["limit_price"], pm.fee_per_contract(fees, d["limit_price"]), chosen_y)
-    real = None
+    def grade(ex):
+        # a fill settles on the strike actually traded, which may differ from the desk's
+        if not ex:
+            return None
+        y = result_for(ex.get("market_ticker") or d.get("market_ticker"))
+        if not y:
+            return None
+        pc = _pnl(ex["side"], ex["price"], pm.fee_per_contract(fees, ex["price"]), y)
+        return round(pc * ex["contracts"], 2)
+
     ex = t.get("execution")
-    if ex:
-        # the client's fill settles on the strike they actually traded, which may differ from the desk's
-        ex_y = result_for(ex.get("market_ticker") or d.get("market_ticker"))
-        if ex_y:
-            pc = _pnl(ex["side"], ex["price"], pm.fee_per_contract(fees, ex["price"]), ex_y)
-            real = round(pc * ex["contracts"], 2)
+    real = grade(ex)
+    pex = t.get("paper_execution")
+    paper_client = grade(pex)
     bm, bk = ladder_brier(t["ladder"], printed, step) if printed is not None else (None, None)
     z = None
     if printed is not None and t["model"]["sigma"]:
@@ -824,10 +830,12 @@ def settle_ticket(t):
         "market_implied_median": t["market_implied_median"],
         "decision": {k: d.get(k) for k in ("status", "market_ticker", "side", "strike", "limit_price", "contracts", "stake", "ev_per_contract", "p_model_side", "gate")},
         "execution": {k: ex.get(k) for k in ("side", "price", "contracts", "stake", "at")} if ex else None,
+        "paper_execution": {k: pex.get(k) for k in ("side", "price", "contracts", "stake", "at")} if pex else None,
         "outcome": outcome,
         "pnl_paper_per_contract": paper_pc,
         "pnl_paper": round(paper_pc * d["contracts"], 2) if paper_pc is not None and d.get("contracts") else None,
         "pnl_real": real,
+        "pnl_paper_client": paper_client,
         "brier_ladder_model": bm, "brier_ladder_market": bk,
         "settled_at": outcome["settled_at"],
     }
@@ -857,6 +865,7 @@ def compute_calibration(entries, playbook):
     decisions = [e for e in settled if e["decision"]["status"] in ("play", "paper") and e.get("pnl_paper_per_contract") is not None]
     pnls = [e["pnl_paper_per_contract"] for e in decisions]
     real = [e for e in settled if e.get("pnl_real") is not None]
+    paper_client = [e for e in settled if e.get("pnl_paper_client") is not None]
     g = playbook["gate"]
     n = len(ev)
     beats = bm is not None and bk is not None and bm < bk
@@ -877,6 +886,7 @@ def compute_calibration(entries, playbook):
                       "mean_pnl_per_contract": round(sum(pnls) / len(pnls), 4) if pnls else None,
                       "total_pnl_per_contract": round(sum(pnls), 4) if pnls else None},
         "real": {"n": len(real), "total_pnl": round(sum(e["pnl_real"] for e in real), 2) if real else None},
+        "paper_client": {"n": len(paper_client), "total_pnl": round(sum(e["pnl_paper_client"] for e in paper_client), 2) if paper_client else None},
         "gate": {"stage": gate, "reason": why},
         "note": "Ladder Brier averages the squared error over every strike of an event, for the model and for the market mid at decision time. Coverage is the share of prints inside the model's 1 and 2 sigma bands (0.68 and 0.95 if the sigmas are honest). One sample per event: the last ticket before release.",
     }
@@ -1144,7 +1154,7 @@ def cmd_ticket(args):
 
 def cmd_record(args):
     if not args:
-        die("usage: prints record <ticket_id> --side yes|no --price P --contracts N [--market TICKER] [--replace]")
+        die("usage: prints record <ticket_id> --side yes|no --price P --contracts N [--market TICKER] [--paper] [--replace]")
     path = tickets_dir() / f"{args[0]}.json"
     if not path.exists():
         die(f"no ticket {args[0]}")
@@ -1158,17 +1168,22 @@ def cmd_record(args):
     market = arg_value(args, "--market") or t["decision"].get("market_ticker")
     if not market:
         die("desk made no call on this ticket; pass --market TICKER for the strike you traded")
-    if t.get("execution") and "--replace" not in args:
-        die("execution already recorded; pass --replace to supersede (old record kept in execution_history)", 3)
+    paper = "--paper" in args
+    slot = "paper_execution" if paper else "execution"
+    if t.get(slot) and "--replace" not in args:
+        die(f"{slot} already recorded; pass --replace to supersede (old record kept in {slot}_history)", 3)
     fee = pm.fee_per_contract(t["fees"], price)
     ex = {"market_ticker": market, "side": side, "price": price, "contracts": contracts, "fee_per_contract": fee,
           "stake": round(contracts * (price + fee), 2), "at": arg_value(args, "--at") or iso(pm.now_unix()),
           "against_desk": t["decision"]["status"] != "play" or t["decision"].get("side") != side or t["decision"].get("market_ticker") != market,
+          "paper": paper,
           "note": arg_value(args, "--note")}
-    if t.get("execution"):
-        t.setdefault("execution_history", []).append(t["execution"])
-    t["execution"] = ex
+    if t.get(slot):
+        t.setdefault(f"{slot}_history", []).append(t[slot])
+    t[slot] = ex
     write_json(path, t)
+    if paper and not pm.OPTS["quiet"]:
+        eprint("prints: recorded as PAPER — a position the client chose not to take. It is graded, and it never touches pnl_real.")
     print(json.dumps(ex, indent=2))
 
 
@@ -1215,7 +1230,7 @@ def cmd_calibrate(args):
     print(f"coverage 1σ {cal['coverage_1sigma']}  2σ {cal['coverage_2sigma']}  (n={cal['n_z']}; honest sigmas give 0.68 / 0.95)")
     d = cal["decisions"]
     print(f"decisions: {d['n']}  hit {d['hit_rate']}  mean P/L per contract {d['mean_pnl_per_contract']}")
-    print(f"real: {cal['real']['n']} fills, total P/L {cal['real']['total_pnl']}")
+    print(f"real: {cal['real']['n']} fills, total P/L {cal['real']['total_pnl']}   client paper: {cal['paper_client']['n']} positions, total {cal['paper_client']['total_pnl']}")
     print(f"GATE: {cal['gate']['stage'].upper()} — {cal['gate']['reason']}")
 
 

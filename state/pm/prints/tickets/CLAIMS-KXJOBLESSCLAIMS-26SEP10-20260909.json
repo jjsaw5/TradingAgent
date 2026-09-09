@@ -381,5 +381,17 @@
   },
   "gaps": [],
   "execution": null,
-  "outcome": null
+  "outcome": null,
+  "paper_execution": {
+    "market_ticker": "KXJOBLESSCLAIMS-26SEP10-200000",
+    "side": "yes",
+    "price": 0.57,
+    "contracts": 85,
+    "fee_per_contract": 0.02,
+    "stake": 50.15,
+    "at": "2026-09-09T13:14:00Z",
+    "against_desk": true,
+    "paper": true,
+    "note": "Client declined the trade; logged on paper at the Robinhood-displayed size: $50 bought ~85 contracts at 57c, payout $85 if Yes. Review Friday."
+  }
 }

@@ -4,103 +4,477 @@
   "title": "Economic-Print Ticket",
   "description": "One frozen decision record per print event per day: the model's distribution and its inputs, the whole strike ladder with the model's probability and the market's quote at each strike, the fee, the edge on each side of each strike, and the mechanical decision. execution and outcome are appended later; nothing else is ever rewritten.",
   "type": "object",
-  "required": ["schema_version", "ticket_id", "print", "venue", "exchange", "event_ticker", "target_period", "release_close", "hours_to_close", "decided_at", "playbook_ref", "model", "market_implied_median", "ladder", "fees", "decision", "gaps", "execution", "outcome"],
+  "required": [
+    "schema_version",
+    "ticket_id",
+    "print",
+    "venue",
+    "exchange",
+    "event_ticker",
+    "target_period",
+    "release_close",
+    "hours_to_close",
+    "decided_at",
+    "playbook_ref",
+    "model",
+    "market_implied_median",
+    "ladder",
+    "fees",
+    "decision",
+    "gaps",
+    "execution",
+    "outcome"
+  ],
   "additionalProperties": false,
   "properties": {
-    "schema_version": { "const": "1.0" },
-    "ticket_id": { "type": "string" },
-    "print": { "enum": ["CPI", "CPICORE", "CPIYOY", "PAYROLLS", "U3", "CLAIMS"] },
-    "print_title": { "type": "string" },
-    "venue": { "const": "robinhood" },
-    "exchange": { "const": "kalshi" },
-    "event_ticker": { "type": "string" },
-    "event_title": { "type": ["string", "null"] },
-    "target_period": { "type": "string", "description": "YYYY-MM for monthly prints, the week-ending date for claims." },
-    "release_close": { "type": "string", "format": "date-time", "description": "Kalshi close time, minutes before the release." },
-    "hours_to_close": { "type": "number" },
-    "decided_at": { "type": "string", "format": "date-time" },
-    "playbook_ref": { "type": ["string", "null"] },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "ticket_id": {
+      "type": "string"
+    },
+    "print": {
+      "enum": [
+        "CPI",
+        "CPICORE",
+        "CPIYOY",
+        "PAYROLLS",
+        "U3",
+        "CLAIMS"
+      ]
+    },
+    "print_title": {
+      "type": "string"
+    },
+    "venue": {
+      "const": "robinhood"
+    },
+    "exchange": {
+      "const": "kalshi"
+    },
+    "event_ticker": {
+      "type": "string"
+    },
+    "event_title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "target_period": {
+      "type": "string",
+      "description": "YYYY-MM for monthly prints, the week-ending date for claims."
+    },
+    "release_close": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Kalshi close time, minutes before the release."
+    },
+    "hours_to_close": {
+      "type": "number"
+    },
+    "decided_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "playbook_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "model": {
       "type": "object",
-      "required": ["name", "mean", "sigma", "note"],
+      "required": [
+        "name",
+        "mean",
+        "sigma",
+        "note"
+      ],
       "properties": {
-        "name": { "type": "string" },
-        "mean": { "type": ["number", "null"] },
-        "sigma": { "type": ["number", "null"] },
-        "horizon": { "type": ["integer", "null"] },
-        "inputs": { "type": ["object", "null"] },
-        "unit": { "type": "string" },
-        "note": { "type": "string" }
+        "name": {
+          "type": "string"
+        },
+        "mean": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "sigma": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "horizon": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "inputs": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "unit": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
       }
     },
-    "market_implied_median": { "type": ["number", "null"], "description": "Where the market's mids cross 0.5, interpolated. The market's own point estimate of the print." },
+    "market_implied_median": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Where the market's mids cross 0.5, interpolated. The market's own point estimate of the print."
+    },
     "ladder": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["ticker", "strike", "rule", "p_model", "yes_bid", "yes_ask", "no_bid", "no_ask", "mid"],
+        "required": [
+          "ticker",
+          "strike",
+          "rule",
+          "p_model",
+          "yes_bid",
+          "yes_ask",
+          "no_bid",
+          "no_ask",
+          "mid"
+        ],
         "properties": {
-          "ticker": { "type": "string" },
-          "strike": { "type": "number" },
-          "rule": { "enum": ["greater", "greater_or_equal", "less", "less_or_equal", "between", "custom", null] },
-          "p_model": { "type": ["number", "null"] },
-          "yes_bid": { "type": ["number", "null"] },
-          "yes_ask": { "type": ["number", "null"] },
-          "no_bid": { "type": ["number", "null"] },
-          "no_ask": { "type": ["number", "null"] },
-          "mid": { "type": ["number", "null"] },
-          "spread": { "type": ["number", "null"] },
-          "volume": { "type": ["number", "null"] },
-          "open_interest": { "type": ["number", "null"] },
-          "edge_yes": { "type": "object" },
-          "edge_no": { "type": "object" }
+          "ticker": {
+            "type": "string"
+          },
+          "strike": {
+            "type": "number"
+          },
+          "rule": {
+            "enum": [
+              "greater",
+              "greater_or_equal",
+              "less",
+              "less_or_equal",
+              "between",
+              "custom",
+              null
+            ]
+          },
+          "p_model": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "yes_bid": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "yes_ask": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "no_bid": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "no_ask": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mid": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "spread": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "volume": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "open_interest": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "edge_yes": {
+            "type": "object"
+          },
+          "edge_no": {
+            "type": "object"
+          }
         }
       }
     },
-    "fees": { "type": "object" },
+    "fees": {
+      "type": "object"
+    },
     "decision": {
       "type": "object",
-      "required": ["status", "market_ticker", "side", "limit_price", "contracts", "stake", "reason", "gate"],
+      "required": [
+        "status",
+        "market_ticker",
+        "side",
+        "limit_price",
+        "contracts",
+        "stake",
+        "reason",
+        "gate"
+      ],
       "properties": {
-        "status": { "enum": ["play", "paper", "pass", "too_late", "too_far", "no_model", "no_quote", "at_capacity", "halted"] },
-        "market_ticker": { "type": ["string", "null"] },
-        "side": { "enum": ["yes", "no", null] },
-        "strike": { "type": ["number", "null"] },
-        "limit_price": { "type": ["number", "null"] },
-        "contracts": { "type": ["integer", "null"] },
-        "stake": { "type": ["number", "null"] },
-        "max_loss": { "type": ["number", "null"] },
-        "ev_per_contract": { "type": ["number", "null"] },
-        "p_model_side": { "type": ["number", "null"] },
-        "gate": { "enum": ["paper", "minimum", "full"] },
-        "reason": { "type": "string" }
+        "status": {
+          "enum": [
+            "play",
+            "paper",
+            "pass",
+            "too_late",
+            "too_far",
+            "no_model",
+            "no_quote",
+            "at_capacity",
+            "halted"
+          ]
+        },
+        "market_ticker": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "side": {
+          "enum": [
+            "yes",
+            "no",
+            null
+          ]
+        },
+        "strike": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "limit_price": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "contracts": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stake": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max_loss": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "ev_per_contract": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "p_model_side": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "gate": {
+          "enum": [
+            "paper",
+            "minimum",
+            "full"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
       }
     },
-    "gaps": { "type": "array", "items": { "type": "string" } },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "execution": {
-      "type": ["object", "null"],
-      "required": ["market_ticker", "side", "price", "contracts", "stake", "at"],
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "market_ticker",
+        "side",
+        "price",
+        "contracts",
+        "stake",
+        "at"
+      ],
       "properties": {
-        "market_ticker": { "type": "string" },
-        "side": { "enum": ["yes", "no"] },
-        "price": { "type": "number" },
-        "contracts": { "type": "integer", "minimum": 1 },
-        "fee_per_contract": { "type": "number" },
-        "stake": { "type": "number" },
-        "at": { "type": "string" },
-        "against_desk": { "type": "boolean" },
-        "note": { "type": ["string", "null"] }
+        "market_ticker": {
+          "type": "string"
+        },
+        "side": {
+          "enum": [
+            "yes",
+            "no"
+          ]
+        },
+        "price": {
+          "type": "number"
+        },
+        "contracts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fee_per_contract": {
+          "type": "number"
+        },
+        "stake": {
+          "type": "number"
+        },
+        "at": {
+          "type": "string"
+        },
+        "against_desk": {
+          "type": "boolean"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "paper": {
+          "type": "boolean"
+        }
       }
     },
-    "execution_history": { "type": "array", "items": { "type": "object" } },
+    "execution_history": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
     "outcome": {
-      "type": ["object", "null"],
-      "required": ["printed", "kalshi_result", "settled_at"],
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "printed",
+        "kalshi_result",
+        "settled_at"
+      ],
       "properties": {
-        "printed": { "type": ["number", "null"], "description": "The print as Kalshi read it (expiration_value)." },
-        "chosen_result": { "enum": ["yes", "no", null] },
-        "kalshi_result": { "type": "string" },
-        "settled_at": { "type": "string", "format": "date-time" }
+        "printed": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "The print as Kalshi read it (expiration_value)."
+        },
+        "chosen_result": {
+          "enum": [
+            "yes",
+            "no",
+            null
+          ]
+        },
+        "kalshi_result": {
+          "type": "string"
+        },
+        "settled_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "paper_execution": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A position the client chose NOT to take but asked to have graded at a stated size. Same shape as execution. Settles into pnl_paper_client and never into pnl_real.",
+      "properties": {
+        "market_ticker": {
+          "type": "string"
+        },
+        "side": {
+          "enum": [
+            "yes",
+            "no"
+          ]
+        },
+        "price": {
+          "type": "number"
+        },
+        "contracts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fee_per_contract": {
+          "type": "number"
+        },
+        "stake": {
+          "type": "number"
+        },
+        "at": {
+          "type": "string"
+        },
+        "against_desk": {
+          "type": "boolean"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "paper": {
+          "type": "boolean"
+        }
+      }
+    },
+    "paper_execution_history": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   }
