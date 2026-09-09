@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "session_date": "2026-09-09",
+  "valid_until": "2026-09-16",
+  "generated_at": "2026-09-09T03:26:53Z",
+  "frozen": true,
+  "revisions": [],
+  "venue": "robinhood",
+  "exchange": "kalshi",
+  "gate_at_open": {
+    "stage": "paper",
+    "reason": "0 settled events; need 20 before any real size"
+  },
+  "prints": [
+    "CPI",
+    "CLAIMS"
+  ],
+  "fees": {
+    "model": "robinhood_flat",
+    "commission_per_contract": 0.01,
+    "exchange_fee_per_contract": 0.01,
+    "verified": false
+  },
+  "rules": {
+    "min_edge_per_contract": 0.08,
+    "max_model_confidence": 0.9,
+    "max_spread": 0.1,
+    "min_ask_size": 20,
+    "max_horizon_days": 10,
+    "min_hours_to_release": 1
+  },
+  "capital": {
+    "max_stake_per_event": 50,
+    "max_weekly_loss": 150,
+    "max_open_events": 3,
+    "paper_stake": 10
+  },
+  "gate": {
+    "min_events_for_minimum": 20,
+    "min_events_for_full": 60,
+    "min_decisions_for_full": 20,
+    "minimum_stake": 10
+  },
+  "notes": "Week of 2026-09-09. CPI and CLAIMS only: the only two prints whose replay sigmas are honest (z stdev 1.24 and 1.00). CLAIMS ladder beat the model on 8 settled events; CPI beat the ladder on 2. Gate is paper: every call logged, none sized. Fees unverified."
+}
