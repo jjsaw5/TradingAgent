@@ -381,7 +381,12 @@
   },
   "gaps": [],
   "execution": null,
-  "outcome": null,
+  "outcome": {
+    "printed": 206000.0,
+    "chosen_result": "yes",
+    "kalshi_result": "yes",
+    "settled_at": "2026-09-11T12:24:26Z"
+  },
   "paper_execution": {
     "market_ticker": "KXJOBLESSCLAIMS-26SEP10-200000",
     "side": "yes",

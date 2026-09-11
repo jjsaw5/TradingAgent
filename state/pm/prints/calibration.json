@@ -1,27 +1,31 @@
 {
   "schema_version": "1.0",
-  "computed_at": "2026-09-09T03:26:53Z",
-  "n_settled_tickets": 0,
-  "n_settled_events": 0,
-  "n_events_with_market": 0,
-  "brier_ladder_model": null,
-  "brier_ladder_market": null,
-  "coverage_1sigma": null,
-  "coverage_2sigma": null,
-  "n_z": 0,
+  "computed_at": "2026-09-11T12:24:26Z",
+  "n_settled_tickets": 1,
+  "n_settled_events": 1,
+  "n_events_with_market": 1,
+  "brier_ladder_model": 0.0391,
+  "brier_ladder_market": 0.0912,
+  "coverage_1sigma": 1.0,
+  "coverage_2sigma": 1.0,
+  "n_z": 1,
   "decisions": {
-    "n": 0,
-    "hit_rate": null,
-    "mean_pnl_per_contract": null,
-    "total_pnl_per_contract": null
+    "n": 1,
+    "hit_rate": 1.0,
+    "mean_pnl_per_contract": 0.44,
+    "total_pnl_per_contract": 0.44
   },
   "real": {
     "n": 0,
     "total_pnl": null
   },
+  "paper_client": {
+    "n": 1,
+    "total_pnl": 34.85
+  },
   "gate": {
     "stage": "paper",
-    "reason": "0 settled events; need 20 before any real size"
+    "reason": "1 settled events; need 20 before any real size"
   },
   "note": "Ladder Brier averages the squared error over every strike of an event, for the model and for the market mid at decision time. Coverage is the share of prints inside the model's 1 and 2 sigma bands (0.68 and 0.95 if the sigmas are honest). One sample per event: the last ticket before release."
 }
