@@ -504,5 +504,10 @@
   },
   "gaps": [],
   "execution": null,
-  "outcome": null
+  "outcome": {
+    "printed": 0.4,
+    "chosen_result": "yes",
+    "kalshi_result": "yes",
+    "settled_at": "2026-09-15T20:40:36Z"
+  }
 }

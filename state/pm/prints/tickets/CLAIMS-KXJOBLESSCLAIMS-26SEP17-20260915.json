@@ -1,0 +1,385 @@
+{
+  "schema_version": "1.0",
+  "ticket_id": "CLAIMS-KXJOBLESSCLAIMS-26SEP17-20260915",
+  "print": "CLAIMS",
+  "print_title": "Initial jobless claims, weekly, seasonally adjusted",
+  "venue": "robinhood",
+  "exchange": "kalshi",
+  "event_ticker": "KXJOBLESSCLAIMS-26SEP17",
+  "event_title": "Initial jobless claims for the week ending September 12, 2026",
+  "target_period": "2026-09-12",
+  "release_close": "2026-09-17T12:25:00Z",
+  "hours_to_close": 39.74,
+  "decided_at": "2026-09-15T20:40:45Z",
+  "playbook_ref": "state/pm/prints/playbook/2026-09-09.json",
+  "model": {
+    "name": "claims_ar_v1",
+    "mean": 206000.0,
+    "sigma": 9544.91872,
+    "horizon": 1,
+    "inputs": {
+      "last_week": "2026-09-05",
+      "last": 206000.0,
+      "avg4": 206000.0,
+      "w": 0.6
+    },
+    "unit": "claims",
+    "note": "MODELED. Claims = w*last week + (1-w)*trailing-4-week mean, w fit on the trailing 156 weeks; sigma is the residual stdev over the trailing 104 weeks. Seasonal adjustment is DOL's, and is revised."
+  },
+  "market_implied_median": 204871.7949,
+  "ladder": [
+    {
+      "ticker": "KXJOBLESSCLAIMS-26SEP17-185000",
+      "strike": 185000.0,
+      "rule": "greater_or_equal",
+      "p_model": 0.9879,
+      "yes_bid": 0.91,
+      "yes_ask": 0.97,
+      "no_bid": 0.03,
+      "no_ask": 0.09,
+      "mid": 0.94,
+      "volume": 1894.0,
+      "open_interest": 1894.0,
+      "spread": 0.06,
+      "edge_yes": {
+        "ask": 0.97,
+        "fee": 0.02,
+        "cost": 0.99,
+        "ev_per_contract": -0.0021,
+        "breakeven_p": 0.99,
+        "kelly_fraction": -0.2145
+      },
+      "edge_no": {
+        "ask": 0.09,
+        "fee": 0.02,
+        "cost": 0.11,
+        "ev_per_contract": -0.0979,
+        "breakeven_p": 0.11,
+        "kelly_fraction": -0.1099
+      }
+    },
+    {
+      "ticker": "KXJOBLESSCLAIMS-26SEP17-190000",
+      "strike": 190000.0,
+      "rule": "greater_or_equal",
+      "p_model": 0.9581,
+      "yes_bid": 0.85,
+      "yes_ask": 0.9,
+      "no_bid": 0.1,
+      "no_ask": 0.15,
+      "mid": 0.875,
+      "volume": 1000.0,
+      "open_interest": 1000.0,
+      "spread": 0.05,
+      "edge_yes": {
+        "ask": 0.9,
+        "fee": 0.02,
+        "cost": 0.92,
+        "ev_per_contract": 0.0381,
+        "breakeven_p": 0.92,
+        "kelly_fraction": 0.4758
+      },
+      "edge_no": {
+        "ask": 0.15,
+        "fee": 0.02,
+        "cost": 0.17,
+        "ev_per_contract": -0.1281,
+        "breakeven_p": 0.17,
+        "kelly_fraction": -0.1543
+      }
+    },
+    {
+      "ticker": "KXJOBLESSCLAIMS-26SEP17-195000",
+      "strike": 195000.0,
+      "rule": "greater_or_equal",
+      "p_model": 0.8859,
+      "yes_bid": 0.76,
+      "yes_ask": 0.82,
+      "no_bid": 0.18,
+      "no_ask": 0.24,
+      "mid": 0.79,
+      "volume": 807.42,
+      "open_interest": 795.42,
+      "spread": 0.06,
+      "edge_yes": {
+        "ask": 0.82,
+        "fee": 0.02,
+        "cost": 0.84,
+        "ev_per_contract": 0.0459,
+        "breakeven_p": 0.84,
+        "kelly_fraction": 0.2867
+      },
+      "edge_no": {
+        "ask": 0.24,
+        "fee": 0.02,
+        "cost": 0.26,
+        "ev_per_contract": -0.1459,
+        "breakeven_p": 0.26,
+        "kelly_fraction": -0.1971
+      }
+    },
+    {
+      "ticker": "KXJOBLESSCLAIMS-26SEP17-200000",
+      "strike": 200000.0,
+      "rule": "greater_or_equal",
+      "p_model": 0.7521,
+      "yes_bid": 0.66,
+      "yes_ask": 0.72,
+      "no_bid": 0.28,
+      "no_ask": 0.34,
+      "mid": 0.69,
+      "volume": 3257.43,
+      "open_interest": 2503.86,
+      "spread": 0.06,
+      "edge_yes": {
+        "ask": 0.72,
+        "fee": 0.02,
+        "cost": 0.74,
+        "ev_per_contract": 0.0121,
+        "breakeven_p": 0.74,
+        "kelly_fraction": 0.0464
+      },
+      "edge_no": {
+        "ask": 0.34,
+        "fee": 0.02,
+        "cost": 0.36,
+        "ev_per_contract": -0.1121,
+        "breakeven_p": 0.36,
+        "kelly_fraction": -0.1751
+      }
+    },
+    {
+      "ticker": "KXJOBLESSCLAIMS-26SEP17-205000",
+      "strike": 205000.0,
+      "rule": "greater_or_equal",
+      "p_model": 0.5624,
+      "yes_bid": 0.49,
+      "yes_ask": 0.5,
+      "no_bid": 0.5,
+      "no_ask": 0.51,
+      "mid": 0.495,
+      "volume": 3693.01,
+      "open_interest": 3291.84,
+      "spread": 0.01,
+      "edge_yes": {
+        "ask": 0.5,
+        "fee": 0.02,
+        "cost": 0.52,
+        "ev_per_contract": 0.0424,
+        "breakeven_p": 0.52,
+        "kelly_fraction": 0.0884
+      },
+      "edge_no": {
+        "ask": 0.51,
+        "fee": 0.02,
+        "cost": 0.53,
+        "ev_per_contract": -0.0924,
+        "breakeven_p": 0.53,
+        "kelly_fraction": -0.1967
+      }
+    },
+    {
+      "ticker": "KXJOBLESSCLAIMS-26SEP17-210000",
+      "strike": 210000.0,
+      "rule": "greater_or_equal",
+      "p_model": 0.3569,
+      "yes_bid": 0.27,
+      "yes_ask": 0.28,
+      "no_bid": 0.72,
+      "no_ask": 0.73,
+      "mid": 0.275,
+      "volume": 631.79,
+      "open_interest": 561.32,
+      "spread": 0.01,
+      "edge_yes": {
+        "ask": 0.28,
+        "fee": 0.02,
+        "cost": 0.3,
+        "ev_per_contract": 0.0569,
+        "breakeven_p": 0.3,
+        "kelly_fraction": 0.0813
+      },
+      "edge_no": {
+        "ask": 0.73,
+        "fee": 0.02,
+        "cost": 0.75,
+        "ev_per_contract": -0.1069,
+        "breakeven_p": 0.75,
+        "kelly_fraction": -0.4277
+      }
+    },
+    {
+      "ticker": "KXJOBLESSCLAIMS-26SEP17-215000",
+      "strike": 215000.0,
+      "rule": "greater_or_equal",
+      "p_model": 0.1866,
+      "yes_bid": 0.07,
+      "yes_ask": 0.1,
+      "no_bid": 0.9,
+      "no_ask": 0.93,
+      "mid": 0.085,
+      "volume": 1233.78,
+      "open_interest": 1228.78,
+      "spread": 0.03,
+      "edge_yes": {
+        "ask": 0.1,
+        "fee": 0.02,
+        "cost": 0.12,
+        "ev_per_contract": 0.0666,
+        "breakeven_p": 0.12,
+        "kelly_fraction": 0.0757
+      },
+      "edge_no": {
+        "ask": 0.93,
+        "fee": 0.02,
+        "cost": 0.95,
+        "ev_per_contract": -0.1366,
+        "breakeven_p": 0.95,
+        "kelly_fraction": -2.7318
+      }
+    },
+    {
+      "ticker": "KXJOBLESSCLAIMS-26SEP17-220000",
+      "strike": 220000.0,
+      "rule": "greater_or_equal",
+      "p_model": 0.0786,
+      "yes_bid": 0.03,
+      "yes_ask": 0.05,
+      "no_bid": 0.95,
+      "no_ask": 0.97,
+      "mid": 0.04,
+      "volume": 421.6,
+      "open_interest": 421.6,
+      "spread": 0.02,
+      "edge_yes": {
+        "ask": 0.05,
+        "fee": 0.02,
+        "cost": 0.07,
+        "ev_per_contract": 0.0086,
+        "breakeven_p": 0.07,
+        "kelly_fraction": 0.0093
+      },
+      "edge_no": {
+        "ask": 0.97,
+        "fee": 0.02,
+        "cost": 0.99,
+        "ev_per_contract": -0.0686,
+        "breakeven_p": 0.99,
+        "kelly_fraction": -6.8627
+      }
+    },
+    {
+      "ticker": "KXJOBLESSCLAIMS-26SEP17-225000",
+      "strike": 225000.0,
+      "rule": "greater_or_equal",
+      "p_model": 0.0263,
+      "yes_bid": 0.01,
+      "yes_ask": 0.03,
+      "no_bid": 0.97,
+      "no_ask": 0.99,
+      "mid": 0.02,
+      "volume": 215.59,
+      "open_interest": 215.59,
+      "spread": 0.02,
+      "edge_yes": {
+        "ask": 0.03,
+        "fee": 0.02,
+        "cost": 0.05,
+        "ev_per_contract": -0.0237,
+        "breakeven_p": 0.05,
+        "kelly_fraction": -0.0249
+      },
+      "edge_no": {
+        "ask": 0.99,
+        "fee": 0.02,
+        "cost": 1.01,
+        "ev_per_contract": -0.0363,
+        "breakeven_p": 1.01,
+        "kelly_fraction": null
+      }
+    },
+    {
+      "ticker": "KXJOBLESSCLAIMS-26SEP17-230000",
+      "strike": 230000.0,
+      "rule": "greater_or_equal",
+      "p_model": 0.0069,
+      "yes_bid": null,
+      "yes_ask": 0.02,
+      "no_bid": 0.98,
+      "no_ask": null,
+      "mid": null,
+      "volume": 0.0,
+      "open_interest": 0.0,
+      "spread": null,
+      "edge_yes": {
+        "ask": 0.02,
+        "fee": 0.02,
+        "cost": 0.04,
+        "ev_per_contract": -0.0331,
+        "breakeven_p": 0.04,
+        "kelly_fraction": -0.0345
+      },
+      "edge_no": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      }
+    },
+    {
+      "ticker": "KXJOBLESSCLAIMS-26SEP17-235000",
+      "strike": 235000.0,
+      "rule": "greater_or_equal",
+      "p_model": 0.0014,
+      "yes_bid": null,
+      "yes_ask": 0.02,
+      "no_bid": 0.98,
+      "no_ask": null,
+      "mid": null,
+      "volume": 0.0,
+      "open_interest": 0.0,
+      "spread": null,
+      "edge_yes": {
+        "ask": 0.02,
+        "fee": 0.02,
+        "cost": 0.04,
+        "ev_per_contract": -0.0386,
+        "breakeven_p": 0.04,
+        "kelly_fraction": -0.0402
+      },
+      "edge_no": {
+        "ask": null,
+        "fee": null,
+        "cost": null,
+        "ev_per_contract": null,
+        "breakeven_p": null,
+        "kelly_fraction": null
+      }
+    }
+  ],
+  "fees": {
+    "model": "robinhood_flat",
+    "commission_per_contract": 0.01,
+    "exchange_fee_per_contract": 0.01,
+    "verified": false
+  },
+  "decision": {
+    "status": "pass",
+    "market_ticker": "KXJOBLESSCLAIMS-26SEP17-215000",
+    "side": "yes",
+    "strike": 215000.0,
+    "limit_price": null,
+    "contracts": null,
+    "stake": null,
+    "max_loss": null,
+    "ev_per_contract": 0.0666,
+    "p_model_side": 0.1866,
+    "gate": "paper",
+    "reason": "best edge 0.067 (yes KXJOBLESSCLAIMS-26SEP17-215000) < 0.08 minimum after fees"
+  },
+  "gaps": [],
+  "execution": null,
+  "outcome": null
+}
